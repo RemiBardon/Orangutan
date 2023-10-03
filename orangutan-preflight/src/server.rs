@@ -1,7 +1,9 @@
 use aes_gcm::aead::{Aead, KeyInit, OsRng};
 use aes_gcm::{Aes256Gcm, Key};
+use base64::{Engine as _, engine::general_purpose};
+use hyper::body::HttpBody;
 use hyper::{Body, Request, Response, Server, StatusCode};
-use hyper::header::HeaderValue;
+use hyper::header::{HeaderValue, WWW_AUTHENTICATE, LOCATION, AUTHORIZATION};
 use hyper::http::uri::Authority;
 use hyper::service::{make_service_fn, service_fn};
 use rusoto_core::{credential::StaticProvider, HttpClient, Region};
@@ -22,6 +24,7 @@ use tracing::{Level, debug, error, info, trace};
 extern crate lazy_static;
 extern crate biscuit_auth as biscuit;
 use biscuit::Biscuit;
+use biscuit::macros::biscuit;
 
 lazy_static! {
     static ref BASE_DIR: &'static Path = Path::new(".orangutan");
@@ -80,8 +83,13 @@ async fn throwing_main() -> Result<(), std::io::Error> {
     let make_svc = make_service_fn(|_conn| async {
         // let a = with_middleware(basic_auth_middleware, handle_request);
         Ok::<_, Infallible>(service_fn(|req: Request<Body>| async {
-            // Apply the middleware to the incoming request
+            debug!("Received {:?}", req);
+
+            // Apply middlewares to the incoming request
             if let Some(Ok(response)) = basic_auth_middleware(&req) {
+                return Ok(response)
+            }
+            if let Some(Ok(response)) = login_middleware(&req) {
                 return Ok(response)
             }
 
@@ -283,6 +291,21 @@ fn matching_files<'a>(query: &str, stored_objects: Vec<String>) -> Vec<String> {
 fn basic_auth_middleware(request: &Request<Body>) -> Option<Result<Response<Body>, Error>> {
     trace!("basic_auth_middleware");
 
+    fn redirect_to_login(request: &Request<Body>) -> Option<Result<Response<Body>, Error>> {
+        if request.uri().path() == "/login" {
+            return None
+        } else {
+            let redirect_to = request.uri().to_string();
+            debug!("Redirecting to <{}>…", redirect_to);
+            return Some(Response::builder()
+                .body(Body::from(format!(r#"
+                <head>
+                    <meta http-equiv="Refresh" content="0; URL=/login?redirect={}" />
+                </head>
+                "#, urlencoding::encode(redirect_to.as_str()))))
+                .map_err(Error::HyperHTTP))
+        }
+    }
     fn authorization_header<'a>(request: &'a Request<Body>) -> Option<&'a HeaderValue> {
         trace!("Checking 'Authorization' header…");
         let header = request.headers().get("Authorization");
@@ -296,8 +319,11 @@ fn basic_auth_middleware(request: &Request<Body>) -> Option<Result<Response<Body
         authority
     }
 
-    let credentials: &str;
+    let credentials: String;
     if let Some(authorization) = authorization_header(request) {
+        // Redirect to `/login` if needed, to handle authentication there
+        if let Some(res) = redirect_to_login(request) { return Some(res) }
+
         let Ok(authorization) = authorization.to_str() else {
             debug!("Authorization header cannot be converted to String");
             return Some(Response::builder()
@@ -312,23 +338,53 @@ fn basic_auth_middleware(request: &Request<Body>) -> Option<Result<Response<Body
             return None
         }
 
-        credentials = authorization.trim_start_matches("Basic ");
+        let credentials_base64 = authorization.trim_start_matches("Basic ");
+
+        let credentials_bytes: Vec<u8>;
+        match general_purpose::STANDARD.decode(credentials_base64) {
+            Ok(bytes) => credentials_bytes = bytes,
+            Err(err) => {
+                debug!("Error: Basic credentials cannot be decoded from base64: {} ({})", err, credentials_base64);
+                return Some(Response::builder()
+                    .status(StatusCode::UNAUTHORIZED)
+                    .body(Body::from("Error: Basic credentials cannot be decoded from base64"))
+                    .map_err(Error::HyperHTTP))
+            },
+        }
+
+        match String::from_utf8(credentials_bytes) {
+            Ok(credentials_str) => credentials = credentials_str,
+            Err(err) => {
+                debug!("Error: Basic credentials cannot be decoded from base64: {} ({})", err, credentials_base64);
+                return Some(Response::builder()
+                    .status(StatusCode::UNAUTHORIZED)
+                    .body(Body::from("Basic credentials cannot be decoded from base64"))
+                    .map_err(Error::HyperHTTP))
+            },
+        }
     } else if let Some(authority) = uri_authority(request) {
+        // Redirect to `/login` if needed, to handle authentication there
+        if let Some(res) = redirect_to_login(request) { return Some(res) }
+
+        // Get the authority part from the URI
+        // NOTE: `request.uri().authority()` doesn't work as expected, hence the workaround
         let split: Vec<&str> = authority.as_str().splitn(2, "@").collect();
         if split.len() != 2 {
             debug!("URI authorization not set");
             return None
         };
 
-        credentials = split[0];
+        credentials = split[0].to_string();
     } else {
         return None
     }
 
+    // TODO: Add an assertion to ensure `redirect_to_login` has been called
+
     // Split the credentials into username and password
     let parts: Vec<&str> = credentials.splitn(2, ':').collect();
     if parts.len() != 2 {
-        debug!("Error: Basic auth header not formatted as `username:password`");
+        debug!("Error: Basic auth header not formatted as `username:password`: {}", credentials);
         return Some(Response::builder()
             .status(StatusCode::UNAUTHORIZED)
             .body(Body::from("Error: Basic auth header not formatted as `username:password`"))
@@ -338,11 +394,98 @@ fn basic_auth_middleware(request: &Request<Body>) -> Option<Result<Response<Body
     let username = parts[0];
     let password = parts[1];
 
-    debug!("Logged in as '{}:{}'", username, password);
+    // FIXME: Check password
+
+    debug!("Logged in as '{}'", username);
+
+    let biscuit: Biscuit;
+    match biscuit!(r#"
+        profile({username});
+        "#).build(&ROOT_KEY) {
+        Ok(b) => biscuit = b,
+        Err(err) => {
+            debug!("Error: Could not create biscuit: {}", err);
+            return Some(Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::from("Error: Could not create token"))
+                .map_err(Error::HyperHTTP))
+        }
+    }
+
+    let biscuit_base64: String;
+    match biscuit.to_base64() {
+        Ok(base64) => biscuit_base64 = base64,
+        Err(err) => {
+            debug!("Error: Could not convert biscuit to base64: {}", err);
+            return Some(Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::from("Error: Could not create token"))
+                .map_err(Error::HyperHTTP))
+        }
+    }
+
+    debug!("Created Biscuit {}", biscuit_base64);
+
+    let redirect_to = request.headers().get("redirect")
+        .map(|h| h.to_str().unwrap())
+        .unwrap_or("/");
 
     Some(Response::builder()
-        .status(StatusCode::INTERNAL_SERVER_ERROR)
-        .body(Body::empty())
+        .header(AUTHORIZATION, format!("Bearer {}", biscuit_base64))
+        .body(Body::from(format!(r#"
+        <head>
+            <meta http-equiv="Refresh" content="0; URL={}" />
+        </head>
+        "#, redirect_to)))
+        .map_err(Error::HyperHTTP))
+}
+
+fn login_middleware(request: &Request<Body>) -> Option<Result<Response<Body>, Error>> {
+    trace!("login_middleware");
+
+    if request.uri().path() != "/login" {
+        return None
+    }
+
+    if request.headers().get(AUTHORIZATION.as_str())
+        .is_some_and(|v| v.to_str().unwrap().starts_with("Bearer "))
+    {
+        let url = "/";
+        trace!("Redirecting to <{}>…", url);
+        return Some(Response::builder()
+            .status(StatusCode::FOUND) // 302 Found (Temporary Redirect)
+            .header(LOCATION, url)
+            // Add Cache-Control and Pragma headers to prevent caching
+            // .header(CACHE_CONTROL, "no-cache")
+            // .header(PRAGMA, "no-cache");
+            .body(Body::empty())
+            .map_err(Error::HyperHTTP))
+    }
+
+    Some(Response::builder()
+        // .status(StatusCode::UNAUTHORIZED)
+        .body(Body::from(r#"
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Login</title>
+        </head>
+        <body>
+            <h1>Login</h1>
+            <form method="POST" action="/login">
+                <label for="username">Username:</label>
+                <input type="text" id="username" name="username" required><br><br>
+                
+                <label for="password">Password:</label>
+                <input type="password" id="password" name="password" required><br><br>
+                
+                <input type="submit" value="Login">
+            </form>
+        </body>
+        </html>
+        "#))
         .map_err(Error::HyperHTTP))
 }
 
