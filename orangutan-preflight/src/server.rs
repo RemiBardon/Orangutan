@@ -308,75 +308,56 @@ fn basic_auth_middleware(request: &Request<Body>) -> Option<Result<Response<Body
     }
     fn authorization_header<'a>(request: &'a Request<Body>) -> Option<&'a HeaderValue> {
         trace!("Checking 'Authorization' header…");
-        let header = request.headers().get("Authorization");
+        let header = request.headers().get(AUTHORIZATION.as_str());
         if header.is_none() { debug!("'Authorization' header not set"); }
         header
     }
-    fn uri_authority<'a>(request: &'a Request<Body>) -> Option<&'a Authority> {
-        trace!("Checking URI authority…");
-        let authority = request.uri().authority();
-        if authority.is_none() { debug!("URI authority not found"); }
-        authority
+
+    let Some(authorization) = authorization_header(request) else {
+        return None
+    };
+
+    // Redirect to `/login` if needed, to handle authentication there
+    if let Some(res) = redirect_to_login(request) { return Some(res) }
+
+    let Ok(authorization) = authorization.to_str() else {
+        debug!("Authorization header cannot be converted to String");
+        return Some(Response::builder()
+            .status(StatusCode::UNAUTHORIZED)
+            .body(Body::from("Authorization header cannot be converted to String"))
+            .map_err(Error::HyperHTTP))
+    };
+
+    // The `Authorization` header should start with "Basic "
+    if !authorization.starts_with("Basic ") {
+        debug!("Authorization not Basic, nothing to do");
+        return None
+    }
+
+    let credentials_base64 = authorization.trim_start_matches("Basic ");
+
+    let credentials_bytes: Vec<u8>;
+    match general_purpose::STANDARD.decode(credentials_base64) {
+        Ok(bytes) => credentials_bytes = bytes,
+        Err(err) => {
+            debug!("Error: Basic credentials cannot be decoded from base64: {} ({})", err, credentials_base64);
+            return Some(Response::builder()
+                .status(StatusCode::UNAUTHORIZED)
+                .body(Body::from("Error: Basic credentials cannot be decoded from base64"))
+                .map_err(Error::HyperHTTP))
+        },
     }
 
     let credentials: String;
-    if let Some(authorization) = authorization_header(request) {
-        // Redirect to `/login` if needed, to handle authentication there
-        if let Some(res) = redirect_to_login(request) { return Some(res) }
-
-        let Ok(authorization) = authorization.to_str() else {
-            debug!("Authorization header cannot be converted to String");
+    match String::from_utf8(credentials_bytes) {
+        Ok(credentials_str) => credentials = credentials_str,
+        Err(err) => {
+            debug!("Error: Basic credentials cannot be decoded from base64: {} ({})", err, credentials_base64);
             return Some(Response::builder()
                 .status(StatusCode::UNAUTHORIZED)
-                .body(Body::from("Authorization header cannot be converted to String"))
+                .body(Body::from("Basic credentials cannot be decoded from base64"))
                 .map_err(Error::HyperHTTP))
-        };
-
-        // The `Authorization` header should start with "Basic "
-        if !authorization.starts_with("Basic ") {
-            debug!("Authorization not Basic, nothing to do");
-            return None
-        }
-
-        let credentials_base64 = authorization.trim_start_matches("Basic ");
-
-        let credentials_bytes: Vec<u8>;
-        match general_purpose::STANDARD.decode(credentials_base64) {
-            Ok(bytes) => credentials_bytes = bytes,
-            Err(err) => {
-                debug!("Error: Basic credentials cannot be decoded from base64: {} ({})", err, credentials_base64);
-                return Some(Response::builder()
-                    .status(StatusCode::UNAUTHORIZED)
-                    .body(Body::from("Error: Basic credentials cannot be decoded from base64"))
-                    .map_err(Error::HyperHTTP))
-            },
-        }
-
-        match String::from_utf8(credentials_bytes) {
-            Ok(credentials_str) => credentials = credentials_str,
-            Err(err) => {
-                debug!("Error: Basic credentials cannot be decoded from base64: {} ({})", err, credentials_base64);
-                return Some(Response::builder()
-                    .status(StatusCode::UNAUTHORIZED)
-                    .body(Body::from("Basic credentials cannot be decoded from base64"))
-                    .map_err(Error::HyperHTTP))
-            },
-        }
-    } else if let Some(authority) = uri_authority(request) {
-        // Redirect to `/login` if needed, to handle authentication there
-        if let Some(res) = redirect_to_login(request) { return Some(res) }
-
-        // Get the authority part from the URI
-        // NOTE: `request.uri().authority()` doesn't work as expected, hence the workaround
-        let split: Vec<&str> = authority.as_str().splitn(2, "@").collect();
-        if split.len() != 2 {
-            debug!("URI authorization not set");
-            return None
-        };
-
-        credentials = split[0].to_string();
-    } else {
-        return None
+        },
     }
 
     // TODO: Add an assertion to ensure `redirect_to_login` has been called
@@ -489,12 +470,20 @@ fn login_middleware(request: &Request<Body>) -> Option<Result<Response<Body>, Er
         .map_err(Error::HyperHTTP))
 }
 
+fn refresh_token_middleware(request: &Request<Body>) -> Option<Result<Response<Body>, Error>> {
+    trace!("refresh_token_middleware");
+
+    if request.uri().query()
+
+    todo!()
+}
+
 fn enforce_bearer_auth(request: &Request<Body>) -> Option<Result<Response<Body>, Error>> {
     trace!("enforce_bearer_auth");
 
     fn authorization_header<'a>(request: &'a Request<Body>) -> Option<&'a HeaderValue> {
         trace!("Checking 'Authorization' header…");
-        let header = request.headers().get("Authorization");
+        let header = request.headers().get(AUTHORIZATION.as_str());
         if header.is_none() { debug!("'Authorization' header not set"); }
         header
     }
