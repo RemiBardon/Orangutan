@@ -5,16 +5,13 @@
 use aes_gcm::aead::{Aead, KeyInit, OsRng};
 use aes_gcm::{Aes256Gcm, Key};
 use base64::{Engine as _, engine::general_purpose};
-use hyper::Uri;
-use hyper::body::to_bytes;
-use rocket::http::{Status, Header};
+use rocket::http::Status;
 use rocket::http::uri::Origin;
 use rocket::{Request, request, Outcome, Response};
 use rocket::request::FromRequest;
 use rusoto_core::{credential::StaticProvider, HttpClient, Region};
 use rusoto_s3::{S3, S3Client, GetObjectRequest, ListObjectsV2Request};
 use tokio::runtime::Runtime;
-use tokio::io::AsyncReadExt;
 use std::collections::HashMap;
 use std::io::{Read, Write, Cursor};
 use std::{env, io, fmt, fs};
@@ -91,9 +88,7 @@ async fn main() {
 
 async fn throwing_main() -> Result<(), std::io::Error> {
     rocket::ignite()
-        .mount("/", routes![get_index])
-        .mount("/api", routes![json_routes])
-        .mount("/", routes![handle_request])
+        .mount("/", routes![get_index, handle_request])
         .launch();
 
     Ok(())
@@ -104,7 +99,7 @@ fn get_index<'a>(origin: &Origin) -> Response<'a> {
     _handle_request(origin)
 }
 
-#[get("/<_path..>", rank = 2)]
+#[get("/<_path..>")]
 fn handle_request<'a>(_path: PathBuf, origin: &Origin) -> Response<'a> {
     _handle_request(origin)
 }
@@ -199,51 +194,6 @@ fn _handle_request<'a>(origin: &Origin) -> Response<'a> {
                 .finalize()
         }
     }
-}
-
-#[get("/<_path..>")]
-fn json_routes<'a>(_path: PathBuf, origin: &Origin) -> Response<'a> {
-    _handle_json(origin)
-}
-
-fn _handle_json<'a>(origin: &Origin) -> Response<'a> {
-    let url = Uri::builder()
-        .scheme("http")
-        .authority("localhost:8081")
-        .path_and_query(origin.to_string())
-        .build()
-        .expect("Uri should always be formatted correctly");
-
-    let client = hyper::Client::new();
-    let response = TOKIO_RUNTIME.block_on(client.get(url)).expect("Failed to fetch URL");
-
-    // Check if the response status code is 200 OK
-    let status = response.status();
-    if !status.is_success() {
-        // You can handle error cases here, e.g., by returning an error Stream
-        // or a custom response.
-        // For simplicity, we're just panicking in this example.
-        panic!("Failed to fetch URL: {:?}", status);
-    }
-
-    let headers = response.headers().clone();
-
-    // Get the response body as a Stream and return it
-    let body_bytes = TOKIO_RUNTIME.block_on(to_bytes(response.into_body()))
-        .expect("Hyper body can't be read to bytes");
-    let body_stream = Cursor::new(body_bytes);
-
-    let mut binding = Response::build();
-    let mut response_builder = binding
-        .status(Status::from_code(status.as_u16()).expect("Statuc code from Hyper can't be invalid"))
-        .streamed_body(body_stream);
-    for header in headers {
-        response_builder = response_builder.header(Header::new(
-            header.0.unwrap().to_string().clone(),
-            header.1.to_str().expect("Something bad happened").to_string(),
-        ));
-    }
-    response_builder.finalize()
 }
 
 struct Token(Biscuit);
