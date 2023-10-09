@@ -13,13 +13,17 @@ biscuit-auth = "4.0.0"
 lazy_static = "1.4.0"
 rand = "0.8.5"
 serde_json = "1.0.105"
-tracing = "0.1.37"
-tracing-subscriber = "0.3.17"
+log = "0.4"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+env_logger = "0.10"
 # For upload
 hyper = { version = "0.14.27", features = ["server"] }
 rusoto_core = "0.48.0"
 rusoto_s3 = "0.48.0"
 tokio = "1.32.0"
+rocket = "0.4.10"
+futures = "0.3"
 
 [[bin]]
 name = "orangutan-init"

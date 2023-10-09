@@ -12,10 +12,10 @@ extern crate lazy_static;
 
 lazy_static! {
     static ref BASE_DIR: &'static Path = Path::new(".orangutan");
-    static ref DEST_DIR: PathBuf = BASE_DIR.join("website");
+    static ref WEBSITE_DIR: PathBuf = BASE_DIR.join("website");
 
     // TODO: Make this a command-line argument
-    static ref DRY_RUN: bool = true;
+    static ref DRY_RUN: bool = false;
 }
 
 #[tokio::main]
@@ -52,7 +52,7 @@ async fn throwing_main() -> Result<(), RusotoError<PutObjectError>> {
 
     for path in find_all_files() {
         let object_name = format!("/{}", path
-            .strip_prefix(DEST_DIR.as_path())
+            .strip_prefix(WEBSITE_DIR.as_path())
             .expect("Could not remove prefix")
             .display());
         info!("Processing '{}'…", object_name);
@@ -75,7 +75,7 @@ async fn throwing_main() -> Result<(), RusotoError<PutObjectError>> {
 
 fn find_all_files() -> Vec<PathBuf> {
     let mut files: Vec<PathBuf> = Vec::new();
-    find(&DEST_DIR, &mut files);
+    find(&WEBSITE_DIR, &mut files);
     files
 }
 
