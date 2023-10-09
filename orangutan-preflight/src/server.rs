@@ -5,7 +5,8 @@
 use aes_gcm::aead::{Aead, KeyInit, OsRng};
 use aes_gcm::{Aes256Gcm, Key};
 use base64::{Engine as _, engine::general_purpose};
-use rocket::http::Status;
+use biscuit::builder::BiscuitBuilder;
+use rocket::http::{Status, Cookie, Cookies};
 use rocket::http::uri::Origin;
 use rocket::{Request, request, Outcome, Response};
 use rocket::request::FromRequest;
@@ -24,8 +25,16 @@ use log::{debug, error, trace};
 extern crate lazy_static;
 extern crate biscuit_auth as biscuit;
 use biscuit::Biscuit;
-use biscuit::macros::{biscuit, block};
+use biscuit::macros::{authorizer, biscuit, block, fact};
 use urlencoding::decode;
+
+const DEFAULT_PROFILE: &'static str = "_default";
+const BUCKET_NAME: &'static str = "orangutan";
+const ROOT_KEY_NAME: &'static str = "_biscuit-root";
+const TOKEN_COOKIE_NAME: &'static str = "token";
+// TODO: Make this a command-line argument
+const DRY_RUN: bool = true;
+const LOCAL: bool = true;
 
 lazy_static! {
     static ref BASE_DIR: &'static Path = Path::new(".orangutan");
@@ -48,9 +57,7 @@ lazy_static! {
             region,
         )
     };
-    static ref BUCKET_NAME: &'static str = "orangutan";
 
-    static ref ROOT_KEY_NAME: &'static str = "_biscuit-root";
     static ref ROOT_KEY: biscuit::KeyPair = {
         match get_root_key() {
             Ok(public_key) => public_key,
@@ -62,9 +69,6 @@ lazy_static! {
     };
 
     static ref TOKIO_RUNTIME: Runtime = Runtime::new().unwrap();
-
-    // TODO: Make this a command-line argument
-    static ref DRY_RUN: bool = true;
 }
 
 #[tokio::main]
@@ -88,7 +92,12 @@ async fn main() {
 
 async fn throwing_main() -> Result<(), std::io::Error> {
     rocket::ignite()
-        .mount("/", routes![get_index, handle_request])
+        .mount("/", routes![
+            get_index,
+            handle_request_authenticated,
+            handle_request,
+            get_user_info,
+        ])
         .launch();
 
     Ok(())
@@ -96,15 +105,51 @@ async fn throwing_main() -> Result<(), std::io::Error> {
 
 #[get("/")]
 fn get_index<'a>(origin: &Origin) -> Response<'a> {
-    _handle_request(origin)
+    _handle_request(origin, None)
+}
+
+#[get("/_info")]
+fn get_user_info(token: Token) -> String {
+    format!(
+        "**Biscuit:**\n\n{}\n\n\
+        **As Datalog:**\n\n{}",
+        token.biscuit.print(),
+        (0..token.biscuit.block_count())
+            .map(|n| token.biscuit.print_block_source(n).unwrap())
+            .collect::<Vec<String>>()
+            .join("\n---\n"),
+    )
 }
 
 #[get("/<_path..>")]
-fn handle_request<'a>(_path: PathBuf, origin: &Origin) -> Response<'a> {
-    _handle_request(origin)
+fn handle_request_authenticated<'a>(
+    _path: PathBuf,
+    origin: &Origin,
+    token: Token,
+    mut cookies: Cookies
+) -> Response<'a> {
+    let response = _handle_request(origin, Some(&token.biscuit));
+
+    if token.should_save {
+        match token.biscuit.to_base64() {
+            Ok(base64) => {
+                cookies.add(Cookie::new(TOKEN_COOKIE_NAME, base64));
+            },
+            Err(err) => {
+                error!("Error setting token cookie: {}", err);
+            },
+        }
+    }
+
+    response
 }
 
-fn _handle_request<'a>(origin: &Origin) -> Response<'a> {
+#[get("/<_path..>", rank = 2)]
+fn handle_request<'a>(_path: PathBuf, origin: &Origin) -> Response<'a> {
+    _handle_request(origin, None)
+}
+
+fn _handle_request<'a>(origin: &Origin, biscuit: Option<&Biscuit>) -> Response<'a> {
     let path = decode(origin.path()).unwrap().into_owned();
     trace!("GET {}", &path);
 
@@ -121,6 +166,35 @@ fn _handle_request<'a>(origin: &Origin) -> Response<'a> {
     }
 
     let matching_files = matching_files(&path, &stored_objects);
+
+    let allowed_profiles = matching_files.iter().flat_map(|f| f.rsplit_terminator("@").next());
+    debug!("Page can be read by '{}'", allowed_profiles.clone().collect::<Vec<_>>().join("', '"));
+    let mut profile: Option<&str> = None;
+    for allowed_profile in allowed_profiles {
+        if allowed_profile == DEFAULT_PROFILE {
+            profile = Some(allowed_profile);
+        } else if let Some(ref biscuit) = biscuit {
+            let authorizer = authorizer!(r#"
+            operation("read");
+            right({allowed_profile}, "read");
+
+            allow if
+              operation($op),
+              profile($p),
+              right($p, $op);
+            "#);
+            if biscuit.authorize(&authorizer).is_ok() {
+                profile = Some(allowed_profile);
+            }
+        }
+    }
+    let Some(profile) = profile else {
+        return Response::build()
+            .status(Status::Unauthorized)
+            .raw_header("WWW-Authenticate", "Basic realm=\"This page is protected. Please log in.\"")
+            .sized_body(Cursor::new("This page doesn't exist or you are not allowed to see it."))
+            .finalize()
+    };
 
     // NOTE: Cannot use `if let Some(object_key)` as it causes
     //   `#[get] can only be used on functions`.
@@ -143,7 +217,7 @@ fn _handle_request<'a>(origin: &Origin) -> Response<'a> {
     };
     let mut data: Vec<u8> = Vec::new();
 
-    if *DRY_RUN {
+    if DRY_RUN || LOCAL {
         debug!("[DRY_RUN] Get object '{}' from bucket '{}'", &s3_req.key, s3_req.bucket);
 
         let file_path = WEBSITE_DIR.join(&s3_req.key.strip_prefix("/").unwrap());
@@ -182,7 +256,7 @@ fn _handle_request<'a>(origin: &Origin) -> Response<'a> {
         }
     }
 
-    match decrypt(data, "_default") {
+    match decrypt(data, profile) {
         Ok(decrypted_data) => {
             Response::build().sized_body(Cursor::new(decrypted_data)).finalize()
         }
@@ -196,22 +270,68 @@ fn _handle_request<'a>(origin: &Origin) -> Response<'a> {
     }
 }
 
-struct Token(Biscuit);
+struct Token {
+    biscuit: Biscuit,
+    should_save: bool,
+}
 
 #[derive(Debug)]
 enum TokenError {
-    Missing,
     Invalid,
-    InternalServerError,
 }
 
 impl<'a, 'r> FromRequest<'a, 'r> for Token {
     type Error = TokenError;
 
     fn from_request(request: &'a Request<'r>) -> request::Outcome<Self, Self::Error> {
-        let mut error = TokenError::Missing;
         let mut biscuit: Option<Biscuit> = None;
+        let mut should_save: bool = false;
 
+        // Check cookies
+        if let Some(cookie) = request.cookies().get(TOKEN_COOKIE_NAME) {
+            debug!("Found token cookie");
+            let token: &str = cookie.value();
+
+            match (
+                &biscuit,
+                Biscuit::from_base64(token, ROOT_KEY.public()),
+            ) {
+                (None, Ok(new_biscuit)) => {
+                    trace!("Found biscuit in token cookie");
+                    biscuit = Some(new_biscuit);
+                },
+                (Some(acc), Ok(new_biscuit)) => {
+                    trace!("Making bigger biscuit from token cookie");
+
+                    let source = (0..acc.block_count())
+                        .map(|n| acc.print_block_source(n).unwrap())
+                        .collect::<Vec<String>>()
+                        .join("\n\n");
+                    let new_code = (0..new_biscuit.block_count())
+                        .map(|n| new_biscuit.print_block_source(n).unwrap())
+                        .collect::<Vec<String>>()
+                        .join("\n\n");
+
+                    let mut builder = BiscuitBuilder::new();
+                    builder.add_code(source).unwrap();
+                    builder.add_code(new_code).unwrap();
+                    match builder.build(&ROOT_KEY) {
+                        Ok(b) => {
+                            biscuit = Some(b);
+                            should_save = true;
+                        },
+                        Err(err) => {
+                            debug!("Error: Could not append block to biscuit: {}", err);
+                        },
+                    }
+                },
+                (_, Err(err)) => {
+                    debug!("Error decoding biscuit from base64: {} ({})", err, token);
+                },
+            }
+        }
+
+        // Check authorization headers
         let authorization_headers: Vec<&str> = request.headers().get("Authorization").collect();
         debug!("{} 'Authorization' headers provided", authorization_headers.len());
         for authorization in authorization_headers {
@@ -227,13 +347,33 @@ impl<'a, 'r> FromRequest<'a, 'r> for Token {
                         trace!("Found biscuit in Bearer token");
                         biscuit = Some(new_biscuit);
                     },
-                    (Some(_), Ok(new_biscuit)) => {
-                        debug!("New biscuit found in Bearer token, using the new one");
-                        biscuit = Some(new_biscuit);
+                    (Some(acc), Ok(new_biscuit)) => {
+                        trace!("Making bigger biscuit from Bearer token");
+
+                        let source = (0..acc.block_count())
+                            .map(|n| acc.print_block_source(n).unwrap())
+                            .collect::<Vec<String>>()
+                            .join("\n\n");
+                        let new_code = (0..new_biscuit.block_count())
+                            .map(|n| new_biscuit.print_block_source(n).unwrap())
+                            .collect::<Vec<String>>()
+                            .join("\n\n");
+
+                        let mut builder = BiscuitBuilder::new();
+                        builder.add_code(source).unwrap();
+                        builder.add_code(new_code).unwrap();
+                        match builder.build(&ROOT_KEY) {
+                            Ok(b) => {
+                                biscuit = Some(b);
+                                should_save = true;
+                            },
+                            Err(err) => {
+                                debug!("Error: Could not append block to biscuit: {}", err);
+                            },
+                        }
                     },
                     (_, Err(err)) => {
                         debug!("Error decoding biscuit from base64: {} ({})", err, token);
-                        error = TokenError::Invalid;
                     },
                 }
             } else if authorization.starts_with("Basic ") {
@@ -246,8 +386,7 @@ impl<'a, 'r> FromRequest<'a, 'r> for Token {
                     Ok(bytes) => credentials_bytes = bytes,
                     Err(err) => {
                         debug!("Error: Basic credentials cannot be decoded from base64: {} ({})", err, credentials_base64);
-                        error = TokenError::Invalid;
-                        return Outcome::Failure((Status::Unauthorized, error))
+                        return Outcome::Failure((Status::Unauthorized, TokenError::Invalid))
                     },
                 }
 
@@ -256,8 +395,7 @@ impl<'a, 'r> FromRequest<'a, 'r> for Token {
                     Ok(credentials_str) => credentials = credentials_str,
                     Err(err) => {
                         debug!("Error: Basic credentials cannot be decoded from base64: {} ({})", err, credentials_base64);
-                        error = TokenError::Invalid;
-                        return Outcome::Failure((Status::Unauthorized, error))
+                        return Outcome::Failure((Status::Unauthorized, TokenError::Invalid))
                     },
                 }
 
@@ -265,7 +403,6 @@ impl<'a, 'r> FromRequest<'a, 'r> for Token {
                 let parts: Vec<&str> = credentials.splitn(2, ':').collect();
                 if parts.len() != 2 {
                     debug!("Error: Basic auth header not formatted as `username:password`: {}", credentials);
-                    error = TokenError::Invalid;
                 }
 
                 let username = parts[0];
@@ -284,34 +421,41 @@ impl<'a, 'r> FromRequest<'a, 'r> for Token {
                             Ok(new_biscuit) => {
                                 trace!("Creating biscuit from Basic credentials");
                                 biscuit = Some(new_biscuit);
+                                should_save = true;
                             },
                             Err(err) => {
                                 debug!("Error: Could not create biscuit from Basic credentials: {}", err);
-                                error = TokenError::InternalServerError;
                             },
                         }
                     },
                     Some(acc) => {
                         trace!("Making bigger biscuit from Basic credentials");
-                        match acc.append_with_keypair(&ROOT_KEY, block!(r#"
-                        profile({username});
-                        "#)) {
-                            Ok(b) => biscuit = Some(b),
+
+                        let source = (0..acc.block_count())
+                            .map(|n| acc.print_block_source(n).unwrap())
+                            .collect::<Vec<String>>()
+                            .join("\n\n");
+
+                        let mut builder = BiscuitBuilder::new();
+                        builder.add_code(source).unwrap();
+                        builder.add_fact(fact!("profile({username})")).unwrap();
+                        match builder.build(&ROOT_KEY) {
+                            Ok(b) => {
+                                biscuit = Some(b);
+                                should_save = true;
+                            },
                             Err(err) => {
                                 debug!("Error: Could not append block to biscuit: {}", err);
-                                error = TokenError::InternalServerError;
-                            }
+                            },
                         }
                     },
                 }
-            } else {
-                error = TokenError::Invalid;
             }
         }
 
         match biscuit {
-            Some(biscuit) => Outcome::Success(Token(biscuit)),
-            None => Outcome::Failure((Status::Unauthorized, error)),
+            Some(biscuit) => Outcome::Success(Token { biscuit, should_save }),
+            None => Outcome::Forward(()),
         }
     }
 }
@@ -393,7 +537,7 @@ fn list_objects(prefix: &str) -> Result<Vec<String>, Error> {
         ..Default::default()
     };
 
-    if *DRY_RUN {
+    if DRY_RUN || LOCAL {
         debug!("[DRY_RUN] Listing objects with prefix '{}' from bucket '{}'", s3_req.prefix.unwrap(), s3_req.bucket);
         debug!("[DRY_RUN] Reading files in <{}> instead", WEBSITE_DIR.display());
         Ok(find_all_files().iter()
@@ -416,21 +560,6 @@ fn list_objects(prefix: &str) -> Result<Vec<String>, Error> {
                         // FIXME: Return error
                         Ok(Vec::new())
                     }
-                    // let mut data: Vec<u8> = Vec::new();
-                    // output.contents.unwrap()
-                    //     .into_async_read()
-                    //     .read_to_end(&mut data)
-                    //     .await
-                    //     .expect("Failed to read ByteStream");
-                    // match decrypt(data, "_default") {
-                    //     Ok(decrypted_data) => {
-                    //         Response::build().sized_body(Cursor::new(decrypted_data)).finalize()
-                    //     }
-                    //     Err(err) => {
-                    //         debug!("Error decrypting file: {:?}", err);
-                    //         Err(err)
-                    //     }
-                    // }
                 },
                 Err(err) => {
                     debug!("Error listing S3 objects: {}", err);
@@ -490,7 +619,7 @@ fn get_key(key_name: &str) -> Result<Key<Aes256Gcm>, io::Error> {
 }
 
 fn get_root_key() -> Result<biscuit::KeyPair, Error> {
-    let key_name = *ROOT_KEY_NAME;
+    let key_name = ROOT_KEY_NAME;
     let key_file = key_file(key_name);
 
     if key_file.exists() {
