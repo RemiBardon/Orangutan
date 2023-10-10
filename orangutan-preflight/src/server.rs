@@ -6,7 +6,9 @@ use aes_gcm::aead::{Aead, KeyInit, OsRng};
 use aes_gcm::{Aes256Gcm, Key};
 use base64::{Engine as _, engine::general_purpose};
 use biscuit::builder::BiscuitBuilder;
-use rocket::http::{Status, Cookie, Cookies};
+extern crate time;
+use time::Duration;
+use rocket::http::{Status, Cookie, Cookies, SameSite};
 use rocket::http::uri::Origin;
 use rocket::{Request, request, Outcome, Response};
 use rocket::request::FromRequest;
@@ -134,7 +136,13 @@ fn handle_request_authenticated<'a>(
     if token.should_save {
         match token.biscuit.to_base64() {
             Ok(base64) => {
-                cookies.add(Cookie::new(TOKEN_COOKIE_NAME, base64));
+                cookies.add(Cookie::build(TOKEN_COOKIE_NAME, base64)
+                    .path("/")
+                    .max_age(Duration::days(365 * 5))
+                    .http_only(true)
+                    .secure(true)
+                    .same_site(SameSite::Strict)
+                    .finish());
             },
             Err(err) => {
                 error!("Error setting token cookie: {}", err);

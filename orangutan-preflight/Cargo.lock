@@ -1326,6 +1326,7 @@ dependencies = [
  "rusoto_core",
  "rusoto_s3",
  "serde_json",
+ "time 0.1.45",
  "tokio",
  "tracing",
  "tracing-subscriber",
