@@ -32,6 +32,7 @@ const DEFAULT_PROFILE: &'static str = "_default";
 const BUCKET_NAME: &'static str = "orangutan";
 const ROOT_KEY_NAME: &'static str = "_biscuit-root";
 const TOKEN_COOKIE_NAME: &'static str = "token";
+const TOKEN_QUERY_PARAM_NAME: &'static str = "token";
 // TODO: Make this a command-line argument
 const DRY_RUN: bool = true;
 const LOCAL: bool = true;
@@ -422,6 +423,12 @@ impl<'a, 'r> FromRequest<'a, 'r> for Token {
                     },
                 }
             }
+        }
+
+        // Check query params
+        if let Some(token) = request.get_query_value::<String>(TOKEN_QUERY_PARAM_NAME).and_then(Result::ok) {
+            debug!("Found token query param");
+            process_token(&token, "token query param", &mut biscuit, &mut should_save);
         }
 
         match biscuit {
