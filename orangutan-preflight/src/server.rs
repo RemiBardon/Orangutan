@@ -25,7 +25,7 @@ use log::{debug, error, trace};
 extern crate lazy_static;
 extern crate biscuit_auth as biscuit;
 use biscuit::Biscuit;
-use biscuit::macros::{authorizer, biscuit, block, fact};
+use biscuit::macros::{authorizer, biscuit, fact};
 use urlencoding::decode;
 
 const DEFAULT_PROFILE: &'static str = "_default";
@@ -626,16 +626,16 @@ fn get_root_key() -> Result<biscuit::KeyPair, Error> {
         // If key file exists, read the file
         trace!("Reading key '{}' from <{}>…", key_name, key_file.display());
         let mut file = File::open(key_file).map_err(Error::IO)?;
-        let mut key_bytes = [0u8; 32];
-        file.read_exact(&mut key_bytes).map_err(Error::IO)?;
-        let key = biscuit::PrivateKey::from_bytes(&key_bytes).map_err(Error::BiscuitFormat)?;
+        let mut key_bytes = String::new();
+        file.read_to_string(&mut key_bytes).map_err(Error::IO)?;
+        let key = biscuit::PrivateKey::from_bytes_hex(&key_bytes).map_err(Error::BiscuitFormat)?;
         Ok(biscuit::KeyPair::from(&key))
     } else {
         // If key file does not exist, create a new key and save it to a new file
         trace!("Saving new key '{}' into <{}>…", key_name, key_file.display());
         let key_pair = biscuit::KeyPair::new();
         let mut file = File::create(&key_file).map_err(Error::IO)?;
-        file.write_all(&key_pair.private().to_bytes()).map_err(Error::IO)?;
+        file.write_all(key_pair.private().to_bytes_hex().as_bytes()).map_err(Error::IO)?;
         Ok(key_pair)
     }
 }
