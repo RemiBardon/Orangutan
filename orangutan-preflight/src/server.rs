@@ -119,7 +119,7 @@ fn get_user_info(token: Token) -> String {
     )
 }
 
-#[get("/<_path..>")]
+#[get("/<_path..>", format = "html")]
 fn handle_request_authenticated<'a>(
     _path: PathBuf,
     origin: &Origin,
@@ -151,6 +151,22 @@ fn _handle_request<'a>(origin: &Origin, biscuit: Option<&Biscuit>) -> Response<'
     let path = decode(origin.path()).unwrap().into_owned();
     trace!("GET {}", &path);
 
+    fn serve_file<'a>(file_path: PathBuf) -> Result<Vec<u8>, Response<'a>> {
+        if let Ok(mut file) = File::open(&file_path) {
+            let mut data: Vec<u8> = Vec::new();
+            if let Err(err) = file.read_to_end(&mut data) {
+                return Err(Response::build()
+                    .sized_body(Cursor::new(format!("Dry run failed: Could not read <{}> from disk: {}", file_path.display(), err)))
+                    .finalize())
+            }
+            return Ok(data)
+        } else {
+            return Err(Response::build()
+                .sized_body(Cursor::new(format!("Dry run failed: Could not read <{}> from disk: Cannot open file", file_path.display())))
+                .finalize())
+        }
+    }
+
     let stored_objects: Vec<String>;
     match list_objects(&path) {
         Ok(o) => stored_objects = o,
@@ -166,7 +182,30 @@ fn _handle_request<'a>(origin: &Origin, biscuit: Option<&Biscuit>) -> Response<'
     let matching_files = matching_files(&path, &stored_objects);
 
     let allowed_profiles = matching_files.iter().flat_map(|f| f.rsplit_terminator("@").next());
-    debug!("Page can be read by '{}'", allowed_profiles.clone().collect::<Vec<_>>().join("', '"));
+    if allowed_profiles.clone().next() == None {
+        // If allowed profiles is empty, it means it's a static file
+        let file_path = WEBSITE_DIR.join(path.strip_prefix("/").unwrap());
+        return match serve_file(file_path) {
+            Ok(data) => {
+                Response::build().sized_body(Cursor::new(data)).finalize()
+            },
+            Err(err) => {
+                debug!("Error reading static file: {:?}", err);
+                Response::build()
+                    .status(Status::InternalServerError)
+                    .sized_body(Cursor::new("Internal Server Error"))
+                    .finalize()
+            },
+        }
+    }
+    debug!(
+        "Page <{}> can be read by {}",
+        &path,
+        allowed_profiles.clone()
+            .map(|p| format!("'{}'", p))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
     let mut profile: Option<&str> = None;
     for allowed_profile in allowed_profiles {
         if allowed_profile == DEFAULT_PROFILE {
@@ -175,6 +214,7 @@ fn _handle_request<'a>(origin: &Origin, biscuit: Option<&Biscuit>) -> Response<'
             let authorizer = authorizer!(r#"
             operation("read");
             right({allowed_profile}, "read");
+            right("*", "read");
 
             allow if
               operation($op),
@@ -197,7 +237,7 @@ fn _handle_request<'a>(origin: &Origin, biscuit: Option<&Biscuit>) -> Response<'
     // NOTE: Cannot use `if let Some(object_key)` as it causes
     //   `#[get] can only be used on functions`.
     let object_key: &String;
-    match matching_files.first() {
+    match matching_files.iter().filter(|f| f.ends_with(&format!("@{}", profile))).next() {
         Some(key) => object_key = key,
         None => {
             debug!("No object matching '{}' in {:?}", &path, stored_objects);
@@ -213,7 +253,7 @@ fn _handle_request<'a>(origin: &Origin, biscuit: Option<&Biscuit>) -> Response<'
         key: object_key.to_owned(),
         ..Default::default()
     };
-    let mut data: Vec<u8> = Vec::new();
+    let data: Vec<u8>;
 
     if DRY_RUN || LOCAL {
         debug!("[DRY_RUN] Get object '{}' from bucket '{}'", &s3_req.key, s3_req.bucket);
@@ -221,16 +261,9 @@ fn _handle_request<'a>(origin: &Origin, biscuit: Option<&Biscuit>) -> Response<'
         let file_path = WEBSITE_DIR.join(&s3_req.key.strip_prefix("/").unwrap());
         debug!("[DRY_RUN] Reading '{}' from disk at <{}>", &s3_req.key, file_path.display());
 
-        if let Ok(mut file) = File::open(&file_path) {
-            if let Err(err) = file.read_to_end(&mut data) {
-                return Response::build()
-                    .sized_body(Cursor::new(format!("Dry run failed: Could not read <{}> from disk: {}", file_path.display(), err)))
-                    .finalize()
-            }
-        } else {
-            return Response::build()
-                .sized_body(Cursor::new(format!("Dry run failed: Could not read <{}> from disk: Cannot open file", file_path.display())))
-                .finalize()
+        match serve_file(file_path) {
+            Ok(_data) => data = _data,
+            Err(response) => return response,
         }
     } else {
         match TOKIO_RUNTIME.block_on(async {
@@ -257,14 +290,14 @@ fn _handle_request<'a>(origin: &Origin, biscuit: Option<&Biscuit>) -> Response<'
     match decrypt(data, profile) {
         Ok(decrypted_data) => {
             Response::build().sized_body(Cursor::new(decrypted_data)).finalize()
-        }
+        },
         Err(err) => {
             debug!("Error decrypting file: {:?}", err);
             Response::build()
                 .status(Status::InternalServerError)
                 .sized_body(Cursor::new("Internal Server Error"))
                 .finalize()
-        }
+        },
     }
 }
 
