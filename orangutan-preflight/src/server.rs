@@ -110,16 +110,19 @@ fn get_index<'a>(origin: &Origin) -> Response<'a> {
 }
 
 #[get("/_info")]
-fn get_user_info(token: Token) -> String {
-    format!(
-        "**Biscuit:**\n\n{}\n\n\
-        **Dump:**\n\n{}",
-        token.biscuit.print(),
-        token.biscuit.authorizer().map_or_else(|e| format!("Error: {}", e).to_string(), |a| a.dump_code()),
-    )
+fn get_user_info(token: Option<Token>) -> String {
+    match token {
+        Some(Token { biscuit, .. }) => format!(
+            "**Biscuit:**\n\n{}\n\n\
+            **Dump:**\n\n{}",
+            biscuit.print(),
+            biscuit.authorizer().map_or_else(|e| format!("Error: {}", e).to_string(), |a| a.dump_code()),
+        ),
+        None => "Not authenticated".to_string(),
+    }
 }
 
-#[get("/<_path..>", format = "html")]
+#[get("/<_path..>")]
 fn handle_request_authenticated<'a>(
     _path: PathBuf,
     origin: &Origin,
