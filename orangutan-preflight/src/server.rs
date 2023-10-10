@@ -113,12 +113,9 @@ fn get_index<'a>(origin: &Origin) -> Response<'a> {
 fn get_user_info(token: Token) -> String {
     format!(
         "**Biscuit:**\n\n{}\n\n\
-        **As Datalog:**\n\n{}",
+        **Dump:**\n\n{}",
         token.biscuit.print(),
-        (0..token.biscuit.block_count())
-            .map(|n| token.biscuit.print_block_source(n).unwrap())
-            .collect::<Vec<String>>()
-            .join("\n---\n"),
+        token.biscuit.authorizer().map_or_else(|e| format!("Error: {}", e).to_string(), |a| a.dump_code()),
     )
 }
 
@@ -305,14 +302,8 @@ impl<'a, 'r> FromRequest<'a, 'r> for Token {
                 (Some(acc), Ok(new_biscuit)) => {
                     trace!("Making bigger biscuit from {}", token_source);
 
-                    let source = (0..acc.block_count())
-                        .map(|n| acc.print_block_source(n).unwrap())
-                        .collect::<Vec<String>>()
-                        .join("\n\n");
-                    let new_code = (0..new_biscuit.block_count())
-                        .map(|n| new_biscuit.print_block_source(n).unwrap())
-                        .collect::<Vec<String>>()
-                        .join("\n\n");
+                    let source = acc.authorizer().unwrap().dump_code();
+                    let new_code = new_biscuit.authorizer().unwrap().dump_code();
 
                     let mut builder = BiscuitBuilder::new();
                     builder.add_code(source).unwrap();
