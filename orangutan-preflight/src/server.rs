@@ -419,7 +419,6 @@ impl<'a, 'r> FromRequest<'a, 'r> for Token {
 
                 debug!("Logged in as '{}'", username);
 
-                // FIXME: Augment existing biscuit instead of creating a new one
                 match &biscuit {
                     None => {
                         match biscuit!(r#"
