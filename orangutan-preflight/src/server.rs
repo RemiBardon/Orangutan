@@ -287,21 +287,22 @@ impl<'a, 'r> FromRequest<'a, 'r> for Token {
         let mut biscuit: Option<Biscuit> = None;
         let mut should_save: bool = false;
 
-        // Check cookies
-        if let Some(cookie) = request.cookies().get(TOKEN_COOKIE_NAME) {
-            debug!("Found token cookie");
-            let token: &str = cookie.value();
-
+        fn process_token(
+            token: &str,
+            token_source: &str,
+            biscuit: &mut Option<Biscuit>,
+            should_save: &mut bool
+        ) {
             match (
                 &biscuit,
                 Biscuit::from_base64(token, ROOT_KEY.public()),
             ) {
                 (None, Ok(new_biscuit)) => {
-                    trace!("Found biscuit in token cookie");
-                    biscuit = Some(new_biscuit);
+                    trace!("Found biscuit in {}", token_source);
+                    *biscuit = Some(new_biscuit);
                 },
                 (Some(acc), Ok(new_biscuit)) => {
-                    trace!("Making bigger biscuit from token cookie");
+                    trace!("Making bigger biscuit from {}", token_source);
 
                     let source = (0..acc.block_count())
                         .map(|n| acc.print_block_source(n).unwrap())
@@ -317,8 +318,8 @@ impl<'a, 'r> FromRequest<'a, 'r> for Token {
                     builder.add_code(new_code).unwrap();
                     match builder.build(&ROOT_KEY) {
                         Ok(b) => {
-                            biscuit = Some(b);
-                            should_save = true;
+                            *biscuit = Some(b);
+                            *should_save = true;
                         },
                         Err(err) => {
                             debug!("Error: Could not append block to biscuit: {}", err);
@@ -331,6 +332,13 @@ impl<'a, 'r> FromRequest<'a, 'r> for Token {
             }
         }
 
+        // Check cookies
+        if let Some(cookie) = request.cookies().get(TOKEN_COOKIE_NAME) {
+            debug!("Found token cookie");
+            let token: &str = cookie.value();
+            process_token(token, "token cookie", &mut biscuit, &mut should_save);
+        }
+
         // Check authorization headers
         let authorization_headers: Vec<&str> = request.headers().get("Authorization").collect();
         debug!("{} 'Authorization' headers provided", authorization_headers.len());
@@ -338,44 +346,7 @@ impl<'a, 'r> FromRequest<'a, 'r> for Token {
             if authorization.starts_with("Bearer ") {
                 debug!("Bearer Authorization provided");
                 let token: &str = authorization.trim_start_matches("Bearer ");
-
-                match (
-                    &biscuit,
-                    Biscuit::from_base64(token, ROOT_KEY.public()),
-                ) {
-                    (None, Ok(new_biscuit)) => {
-                        trace!("Found biscuit in Bearer token");
-                        biscuit = Some(new_biscuit);
-                    },
-                    (Some(acc), Ok(new_biscuit)) => {
-                        trace!("Making bigger biscuit from Bearer token");
-
-                        let source = (0..acc.block_count())
-                            .map(|n| acc.print_block_source(n).unwrap())
-                            .collect::<Vec<String>>()
-                            .join("\n\n");
-                        let new_code = (0..new_biscuit.block_count())
-                            .map(|n| new_biscuit.print_block_source(n).unwrap())
-                            .collect::<Vec<String>>()
-                            .join("\n\n");
-
-                        let mut builder = BiscuitBuilder::new();
-                        builder.add_code(source).unwrap();
-                        builder.add_code(new_code).unwrap();
-                        match builder.build(&ROOT_KEY) {
-                            Ok(b) => {
-                                biscuit = Some(b);
-                                should_save = true;
-                            },
-                            Err(err) => {
-                                debug!("Error: Could not append block to biscuit: {}", err);
-                            },
-                        }
-                    },
-                    (_, Err(err)) => {
-                        debug!("Error decoding biscuit from base64: {} ({})", err, token);
-                    },
-                }
+                process_token(token, "Bearer token", &mut biscuit, &mut should_save);
             } else if authorization.starts_with("Basic ") {
                 debug!("Basic Authorization provided");
 
