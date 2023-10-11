@@ -5,8 +5,8 @@
 use aes_gcm::aead::{Aead, KeyInit, OsRng};
 use aes_gcm::{Aes256Gcm, Key};
 use base64::{Engine as _, engine::general_purpose};
-use biscuit::builder::BiscuitBuilder;
 extern crate time;
+use rocket::http::hyper::header::{Location, CacheControl, Pragma, CacheDirective};
 use time::Duration;
 use rocket::http::{Status, Cookie, Cookies, SameSite};
 use rocket::http::uri::Origin;
@@ -17,6 +17,7 @@ use rusoto_s3::{S3, S3Client, GetObjectRequest, ListObjectsV2Request};
 use tokio::runtime::Runtime;
 use std::collections::HashMap;
 use std::io::{Read, Write, Cursor};
+use std::time::SystemTime;
 use std::{env, io, fmt, fs};
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -97,6 +98,7 @@ async fn throwing_main() -> Result<(), std::io::Error> {
     rocket::ignite()
         .mount("/", routes![
             get_index,
+            handle_refresh_token,
             handle_request_authenticated,
             handle_request,
             get_user_info,
@@ -124,6 +126,82 @@ fn get_user_info(token: Option<Token>) -> String {
     }
 }
 
+#[get("/<_path..>?<refresh_token>")]
+fn handle_refresh_token<'a>(
+    _path: PathBuf,
+    origin: &Origin,
+    token: Option<Token>,
+    mut cookies: Cookies,
+    mut refresh_token: String,
+) -> Response<'a> {
+    debug!("Found refresh token query param");
+
+    let new_token: Token;
+    refresh_token = decode(&refresh_token).unwrap().to_string();
+    match Biscuit::from_base64(refresh_token, ROOT_KEY.public()) {
+        Ok(refresh_biscuit) => {
+            trace!("Checking if refresh token is valid or not");
+            let authorizer = authorizer!(
+                r#"
+                time({now});
+                allow if true;
+                "#,
+                now = SystemTime::now(),
+            );
+            if let Err(err) = refresh_biscuit.authorize(&authorizer) {
+                debug!("Refresh token is invalid: {}", err);
+                // FIXME: Send Unauthorized
+                panic!()
+            }
+
+            trace!("Baking biscuit from refresh token");
+            let source = refresh_biscuit.print_block_source(0).unwrap();
+            let mut builder = Biscuit::builder();
+            builder.add_code(source).unwrap();
+            match (token, builder.build(&ROOT_KEY)) {
+                (None, Ok(new_biscuit)) => {
+                    trace!("Created new biscuit from refresh token");
+                    new_token = Token { biscuit: new_biscuit, should_save: true };
+                },
+                (Some(Token { biscuit: acc, .. }), Ok(b)) => {
+                    trace!("Making bigger biscuit from refresh token");
+                    if let Some(new_biscuit) = merge_biscuits(&acc, &b) {
+                        new_token = Token { biscuit: new_biscuit, should_save: true };
+                    } else {
+                        // FIXME: Send Unauthorized
+                        panic!()
+                    }
+                },
+                (_, Err(err)) => {
+                    debug!("Error: Could not append block to biscuit: {}", err);
+                    // FIXME: Send Unauthorized
+                    panic!()
+                },
+            }
+        },
+        Err(err) => {
+            debug!("Error decoding biscuit from base64: {}", err);
+            // FIXME: Send Unauthorized
+            panic!()
+        },
+    }
+
+    // Save token to a Cookie if necessary
+    add_cookie_if_necessary(&new_token, &mut cookies);
+
+    // Redirect to the same page without the refresh token query param
+    // FIXME: Do not clear the whole query
+    let mut origin = origin.clone();
+    origin.clear_query();
+    Response::build()
+        .status(Status::Found) // 302 Found (Temporary Redirect)
+        .header(Location(origin.to_string()))
+        // Add Cache-Control and Pragma headers to prevent caching
+        .header(CacheControl(vec![CacheDirective::NoCache]))
+        .header(Pragma::NoCache)
+        .finalize()
+}
+
 #[get("/<_path..>")]
 fn handle_request_authenticated<'a>(
     _path: PathBuf,
@@ -131,26 +209,8 @@ fn handle_request_authenticated<'a>(
     token: Token,
     mut cookies: Cookies
 ) -> Response<'a> {
-    let response = _handle_request(origin, Some(&token.biscuit));
-
-    if token.should_save {
-        match token.biscuit.to_base64() {
-            Ok(base64) => {
-                cookies.add(Cookie::build(TOKEN_COOKIE_NAME, base64)
-                    .path("/")
-                    .max_age(Duration::days(365 * 5))
-                    .http_only(true)
-                    .secure(true)
-                    .same_site(SameSite::Strict)
-                    .finish());
-            },
-            Err(err) => {
-                error!("Error setting token cookie: {}", err);
-            },
-        }
-    }
-
-    response
+    add_cookie_if_necessary(&token, &mut cookies);
+    _handle_request(origin, Some(&token.biscuit))
 }
 
 #[get("/<_path..>", rank = 2)]
@@ -336,34 +396,23 @@ impl<'a, 'r> FromRequest<'a, 'r> for Token {
             should_save: &mut bool
         ) {
             match (
-                &biscuit,
+                biscuit.clone(),
                 Biscuit::from_base64(token, ROOT_KEY.public()),
             ) {
                 (None, Ok(new_biscuit)) => {
                     trace!("Found biscuit in {}", token_source);
                     *biscuit = Some(new_biscuit);
+                    *should_save = true;
                 },
                 (Some(acc), Ok(new_biscuit)) => {
                     trace!("Making bigger biscuit from {}", token_source);
-
-                    let source = acc.authorizer().unwrap().dump_code();
-                    let new_code = new_biscuit.authorizer().unwrap().dump_code();
-
-                    let mut builder = BiscuitBuilder::new();
-                    builder.add_code(source).unwrap();
-                    builder.add_code(new_code).unwrap();
-                    match builder.build(&ROOT_KEY) {
-                        Ok(b) => {
-                            *biscuit = Some(b);
-                            *should_save = true;
-                        },
-                        Err(err) => {
-                            debug!("Error: Could not append block to biscuit: {}", err);
-                        },
+                    if let Some(b) = merge_biscuits(&acc, &new_biscuit) {
+                        *biscuit = Some(b);
+                        *should_save = true;
                     }
                 },
                 (_, Err(err)) => {
-                    debug!("Error decoding biscuit from base64: {} ({})", err, token);
+                    debug!("Error decoding biscuit from base64: {}", err);
                 },
             }
         }
@@ -372,6 +421,10 @@ impl<'a, 'r> FromRequest<'a, 'r> for Token {
         if let Some(cookie) = request.cookies().get(TOKEN_COOKIE_NAME) {
             debug!("Found token cookie");
             let token: &str = cookie.value();
+            // NOTE: We don't want to send a `Set-Cookie` header after finding a token in a cookie,
+            //   so let's create a temporary value which prevents `process_token` from changing
+            //   the global `should_save` value.
+            let mut should_save = false;
             process_token(token, "token cookie", &mut biscuit, &mut should_save);
         }
 
@@ -442,7 +495,7 @@ impl<'a, 'r> FromRequest<'a, 'r> for Token {
                             .collect::<Vec<String>>()
                             .join("\n\n");
 
-                        let mut builder = BiscuitBuilder::new();
+                        let mut builder = Biscuit::builder();
                         builder.add_code(source).unwrap();
                         builder.add_fact(fact!("profile({username})")).unwrap();
                         match builder.build(&ROOT_KEY) {
@@ -469,6 +522,41 @@ impl<'a, 'r> FromRequest<'a, 'r> for Token {
             Some(biscuit) => Outcome::Success(Token { biscuit, should_save }),
             None => Outcome::Forward(()),
         }
+    }
+}
+
+fn add_cookie_if_necessary(token: &Token, cookies: &mut Cookies) {
+    if token.should_save {
+        match token.biscuit.to_base64() {
+            Ok(base64) => {
+                cookies.add(Cookie::build(TOKEN_COOKIE_NAME, base64)
+                    .path("/")
+                    .max_age(Duration::days(365 * 5))
+                    .http_only(true)
+                    .secure(true)
+                    .same_site(SameSite::Strict)
+                    .finish());
+            },
+            Err(err) => {
+                error!("Error setting token cookie: {}", err);
+            },
+        }
+    }
+}
+
+fn merge_biscuits(b1: &Biscuit, b2: &Biscuit) -> Option<Biscuit> {
+    let source = b1.authorizer().unwrap().dump_code();
+    let new_code = b2.authorizer().unwrap().dump_code();
+
+    let mut builder = Biscuit::builder();
+    builder.add_code(source).unwrap();
+    builder.add_code(new_code).unwrap();
+    match builder.build(&ROOT_KEY) {
+        Ok(b) => Some(b),
+        Err(err) => {
+            debug!("Error: Could not append block to biscuit: {}", err);
+            None
+        },
     }
 }
 
