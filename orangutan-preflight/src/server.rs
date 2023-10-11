@@ -4,7 +4,8 @@
 
 use aes_gcm::aead::{Aead, KeyInit, OsRng};
 use aes_gcm::{Aes256Gcm, Key};
-use base64::{Engine as _, engine::general_purpose};
+// TODO: Re-enable Basic authentication
+// use base64::{Engine as _, engine::general_purpose};
 extern crate time;
 use rocket::http::hyper::header::{Location, CacheControl, Pragma, CacheDirective};
 use time::Duration;
@@ -28,7 +29,7 @@ use log::{debug, error, trace};
 extern crate lazy_static;
 extern crate biscuit_auth as biscuit;
 use biscuit::Biscuit;
-use biscuit::macros::{authorizer, biscuit, fact};
+use biscuit::macros::authorizer;
 use urlencoding::decode;
 
 const DEFAULT_PROFILE: &'static str = "_default";
@@ -298,9 +299,11 @@ fn _handle_request<'a>(origin: &Origin, biscuit: Option<&Biscuit>) -> Response<'
         }
     }
     let Some(profile) = profile else {
+        debug!("Basic authentication disabled");
         return Response::build()
             .status(Status::Unauthorized)
-            .raw_header("WWW-Authenticate", "Basic realm=\"This page is protected. Please log in.\"")
+            // TODO: Re-enable Basic authentication
+            // .raw_header("WWW-Authenticate", "Basic realm=\"This page is protected. Please log in.\"")
             .sized_body(Cursor::new("This page doesn't exist or you are not allowed to see it."))
             .finalize()
     };
@@ -379,7 +382,8 @@ struct Token {
 
 #[derive(Debug)]
 enum TokenError {
-    Invalid,
+    // TODO: Re-enable Basic authentication
+    // Invalid,
 }
 
 impl<'a, 'r> FromRequest<'a, 'r> for Token {
@@ -437,78 +441,80 @@ impl<'a, 'r> FromRequest<'a, 'r> for Token {
                 let token: &str = authorization.trim_start_matches("Bearer ");
                 process_token(token, "Bearer token", &mut biscuit, &mut should_save);
             } else if authorization.starts_with("Basic ") {
-                debug!("Basic Authorization provided");
+                debug!("Basic authentication disabled");
+                // TODO: Re-enable Basic authentication
+                // debug!("Basic Authorization provided");
 
-                let credentials_base64 = authorization.trim_start_matches("Basic ");
+                // let credentials_base64 = authorization.trim_start_matches("Basic ");
 
-                let credentials_bytes: Vec<u8>;
-                match general_purpose::STANDARD.decode(credentials_base64) {
-                    Ok(bytes) => credentials_bytes = bytes,
-                    Err(err) => {
-                        debug!("Error: Basic credentials cannot be decoded from base64: {} ({})", err, credentials_base64);
-                        return Outcome::Failure((Status::Unauthorized, TokenError::Invalid))
-                    },
-                }
+                // let credentials_bytes: Vec<u8>;
+                // match general_purpose::STANDARD.decode(credentials_base64) {
+                //     Ok(bytes) => credentials_bytes = bytes,
+                //     Err(err) => {
+                //         debug!("Error: Basic credentials cannot be decoded from base64: {} ({})", err, credentials_base64);
+                //         return Outcome::Failure((Status::Unauthorized, TokenError::Invalid))
+                //     },
+                // }
 
-                let credentials: String;
-                match String::from_utf8(credentials_bytes) {
-                    Ok(credentials_str) => credentials = credentials_str,
-                    Err(err) => {
-                        debug!("Error: Basic credentials cannot be decoded from base64: {} ({})", err, credentials_base64);
-                        return Outcome::Failure((Status::Unauthorized, TokenError::Invalid))
-                    },
-                }
+                // let credentials: String;
+                // match String::from_utf8(credentials_bytes) {
+                //     Ok(credentials_str) => credentials = credentials_str,
+                //     Err(err) => {
+                //         debug!("Error: Basic credentials cannot be decoded from base64: {} ({})", err, credentials_base64);
+                //         return Outcome::Failure((Status::Unauthorized, TokenError::Invalid))
+                //     },
+                // }
 
-                // Split the credentials into username and password
-                let parts: Vec<&str> = credentials.splitn(2, ':').collect();
-                if parts.len() != 2 {
-                    debug!("Error: Basic auth header not formatted as `username:password`: {}", credentials);
-                }
+                // // Split the credentials into username and password
+                // let parts: Vec<&str> = credentials.splitn(2, ':').collect();
+                // if parts.len() != 2 {
+                //     debug!("Error: Basic auth header not formatted as `username:password`: {}", credentials);
+                // }
 
-                let username = parts[0];
-                let password = parts[1];
+                // let username = parts[0];
+                // let password = parts[1];
 
-                // FIXME: Check password
+                // // FIXME: Check password
 
-                debug!("Logged in as '{}'", username);
+                // debug!("Logged in as '{}'", username);
 
-                match &biscuit {
-                    None => {
-                        match biscuit!(r#"
-                        profile({username});
-                        "#).build(&ROOT_KEY) {
-                            Ok(new_biscuit) => {
-                                trace!("Creating biscuit from Basic credentials");
-                                biscuit = Some(new_biscuit);
-                                should_save = true;
-                            },
-                            Err(err) => {
-                                debug!("Error: Could not create biscuit from Basic credentials: {}", err);
-                            },
-                        }
-                    },
-                    Some(acc) => {
-                        trace!("Making bigger biscuit from Basic credentials");
+                // match &biscuit {
+                //     None => {
+                //         match biscuit!(r#"
+                //         profile({username});
+                //         "#).build(&ROOT_KEY) {
+                //             Ok(new_biscuit) => {
+                //                 trace!("Creating biscuit from Basic credentials");
+                //                 biscuit = Some(new_biscuit);
+                //                 should_save = true;
+                //             },
+                //             Err(err) => {
+                //                 debug!("Error: Could not create biscuit from Basic credentials: {}", err);
+                //             },
+                //         }
+                //     },
+                //     Some(acc) => {
+                //         trace!("Making bigger biscuit from Basic credentials");
 
-                        let source = (0..acc.block_count())
-                            .map(|n| acc.print_block_source(n).unwrap())
-                            .collect::<Vec<String>>()
-                            .join("\n\n");
+                //         let source = (0..acc.block_count())
+                //             .map(|n| acc.print_block_source(n).unwrap())
+                //             .collect::<Vec<String>>()
+                //             .join("\n\n");
 
-                        let mut builder = Biscuit::builder();
-                        builder.add_code(source).unwrap();
-                        builder.add_fact(fact!("profile({username})")).unwrap();
-                        match builder.build(&ROOT_KEY) {
-                            Ok(b) => {
-                                biscuit = Some(b);
-                                should_save = true;
-                            },
-                            Err(err) => {
-                                debug!("Error: Could not append block to biscuit: {}", err);
-                            },
-                        }
-                    },
-                }
+                //         let mut builder = Biscuit::builder();
+                //         builder.add_code(source).unwrap();
+                //         builder.add_fact(fact!("profile({username})")).unwrap();
+                //         match builder.build(&ROOT_KEY) {
+                //             Ok(b) => {
+                //                 biscuit = Some(b);
+                //                 should_save = true;
+                //             },
+                //             Err(err) => {
+                //                 debug!("Error: Could not append block to biscuit: {}", err);
+                //             },
+                //         }
+                //     },
+                // }
             }
         }
 
