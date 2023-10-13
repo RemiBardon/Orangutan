@@ -4,8 +4,7 @@
 
 use aes_gcm::aead::{Aead, KeyInit, OsRng};
 use aes_gcm::{Aes256Gcm, Key};
-// TODO: Re-enable Basic authentication
-// use base64::{Engine as _, engine::general_purpose};
+use base64::{Engine as _, engine::general_purpose};
 extern crate time;
 use rocket::http::hyper::header::{Location, CacheControl, Pragma, CacheDirective};
 use time::Duration;
@@ -34,15 +33,16 @@ use urlencoding::decode;
 
 const DEFAULT_PROFILE: &'static str = "_default";
 const BUCKET_NAME: &'static str = "orangutan";
-const ROOT_KEY_NAME: &'static str = "_biscuit-root";
+const ROOT_KEY_NAME: &'static str = "_biscuit_root";
 const TOKEN_COOKIE_NAME: &'static str = "token";
 const TOKEN_QUERY_PARAM_NAME: &'static str = "token";
 const REFRESH_TOKEN_QUERY_PARAM_NAME: &'static str = "refresh_token";
-// TODO: Make this a command-line argument
-const DRY_RUN: bool = true;
-const LOCAL: bool = true;
 
 lazy_static! {
+    // TODO: Make this a command-line argument
+    static ref DRY_RUN: bool = env::var("DRY_RUN").map_or(true, |v| v == "true");
+    static ref LOCAL: bool = env::var("RUN_LOCALLY").map_or(true, |v| v == "true");
+
     static ref BASE_DIR: &'static Path = Path::new(".orangutan");
     static ref WEBSITE_DIR: PathBuf = BASE_DIR.join("website");
     static ref KEYS_DIR: PathBuf = BASE_DIR.join("keys");
@@ -74,11 +74,10 @@ lazy_static! {
         }
     };
 
-    static ref TOKIO_RUNTIME: Runtime = Runtime::new().unwrap();
+    static ref TOKIO_RUNTIME: Runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
     // let subscriber = FmtSubscriber::builder()
     //     .with_max_level(Level::DEBUG)
     //     .finish();
@@ -90,13 +89,13 @@ async fn main() {
     //     .target(env_logger::Target::Stdout)
     //     .init();
 
-    if let Err(err) = throwing_main().await {
+    if let Err(err) = throwing_main() {
         error!("Error: {}", err);
         exit(1);
     }
 }
 
-async fn throwing_main() -> Result<(), std::io::Error> {
+fn throwing_main() -> Result<(), std::io::Error> {
     rocket::ignite()
         .mount("/", routes![
             get_index,
@@ -163,11 +162,11 @@ fn handle_request_authenticated<'a>(
 }
 
 #[get("/<_path..>", rank = 3)]
-fn handle_request<'a>(_path: PathBuf, origin: &Origin) -> Response<'a> {
+fn handle_request<'a>(_path: PathBuf, origin: &'a Origin<'a>) -> Response<'a> {
     _handle_request(origin, None)
 }
 
-fn _handle_request<'a>(origin: &Origin, biscuit: Option<&Biscuit>) -> Response<'a> {
+fn _handle_request<'a>(origin: &Origin<'_>, biscuit: Option<&Biscuit>) -> Response<'a> {
     let path = decode(origin.path()).unwrap().into_owned();
     trace!("GET {}", &path);
 
@@ -277,7 +276,7 @@ fn _handle_request<'a>(origin: &Origin, biscuit: Option<&Biscuit>) -> Response<'
     };
     let data: Vec<u8>;
 
-    if DRY_RUN || LOCAL {
+    if *DRY_RUN || *LOCAL {
         debug!("[DRY_RUN] Get object '{}' from bucket '{}'", &s3_req.key, s3_req.bucket);
 
         let file_path = WEBSITE_DIR.join(&s3_req.key.strip_prefix("/").unwrap());
@@ -288,16 +287,15 @@ fn _handle_request<'a>(origin: &Origin, biscuit: Option<&Biscuit>) -> Response<'
             Err(response) => return response,
         }
     } else {
-        match TOKIO_RUNTIME.block_on(async {
-            S3_CLIENT.get_object(s3_req).await.map(|output| {
+        match TOKIO_RUNTIME.block_on(S3_CLIENT.get_object(s3_req))
+            .map(|output| {
                 let mut data: Vec<u8> = Vec::new();
                 output.body.unwrap()
                     .into_blocking_read()
                     .read_to_end(&mut data)
                     .expect("Failed to read ByteStream");
                 data
-            })
-        }) {
+            }) {
             Ok(_data) => data = _data,
             Err(err) => {
                 debug!("Error getting S3 object: {}", err);
@@ -663,7 +661,7 @@ fn list_objects(prefix: &str) -> Result<Vec<String>, Error> {
         ..Default::default()
     };
 
-    if DRY_RUN || LOCAL {
+    if *DRY_RUN || *LOCAL {
         debug!("[DRY_RUN] Listing objects with prefix '{}' from bucket '{}'", s3_req.prefix.unwrap(), s3_req.bucket);
         debug!("[DRY_RUN] Reading files in <{}> instead", WEBSITE_DIR.display());
         Ok(find_all_files().iter()
@@ -715,54 +713,82 @@ fn find(dir: &PathBuf, files: &mut Vec<PathBuf>) {
     }
 }
 
-fn get_key(key_name: &str) -> Result<Key<Aes256Gcm>, io::Error> {
+fn get_key(key_name: &str) -> Result<Key<Aes256Gcm>, Error> {
     let mut keys = KEYS.lock().unwrap();
     if let Some(key) = keys.get(key_name) {
         trace!("Read key '{}' from cache", key_name);
         return Ok(*key);
     }
 
-    let key_file = key_file(key_name);
+    if *LOCAL {
+        let key_file = key_file(key_name);
 
-    if key_file.exists() {
-        // If key file exists, read the file
-        trace!("Reading key '{}' from <{}>…", key_name, key_file.display());
-        let mut file = File::open(key_file)?;
-        let mut key_bytes = [0u8; 32];
-        file.read_exact(&mut key_bytes)?;
-        let key: Key<Aes256Gcm> = key_bytes.into();
-        keys.insert(key_name.to_string(), key);
-        Ok(key)
+        if key_file.exists() {
+            // If key file exists, read the file
+            trace!("Reading key '{}' from <{}>…", key_name, key_file.display());
+            let mut file = File::open(key_file).map_err(Error::IO)?;
+            let mut key_bytes = [0u8; 32];
+            file.read_exact(&mut key_bytes).map_err(Error::IO)?;
+            let key: Key<Aes256Gcm> = key_bytes.into();
+            keys.insert(key_name.to_string(), key);
+            Ok(key)
+        } else {
+            // If key file does not exist, create a new key and save it to a new file
+            trace!("Saving new key '{}' into <{}>…", key_name, key_file.display());
+            let key = Aes256Gcm::generate_key(OsRng);
+            let mut file = File::create(&key_file).map_err(Error::IO)?;
+            file.write_all(&key).map_err(Error::IO)?;
+            keys.insert(key_name.to_string(), key);
+            Ok(key)
+        }
     } else {
-        // If key file does not exist, create a new key and save it to a new file
-        trace!("Saving new key '{}' into <{}>…", key_name, key_file.display());
-        let key = Aes256Gcm::generate_key(OsRng);
-        let mut file = File::create(&key_file)?;
-        file.write_all(&key)?;
-        keys.insert(key_name.to_string(), key);
-        Ok(key)
+        let env_var_name = format!("KEY_{}", key_name);
+        trace!("Reading key '{}' from environment ({})…", key_name, env_var_name);
+        env::var(env_var_name)
+            .map_err(Error::Env)
+            .and_then(|key_base64| {
+                let mut key_bytes = [0u8; 32];
+                // FIXME: Handle error
+                general_purpose::STANDARD.decode_slice(key_base64, &mut key_bytes).unwrap();
+
+                let key: Key<Aes256Gcm> = key_bytes.into();
+                keys.insert(key_name.to_string(), key);
+                Ok(key)
+            })
     }
 }
 
 fn get_root_key() -> Result<biscuit::KeyPair, Error> {
     let key_name = ROOT_KEY_NAME;
-    let key_file = key_file(key_name);
 
-    if key_file.exists() {
-        // If key file exists, read the file
-        trace!("Reading key '{}' from <{}>…", key_name, key_file.display());
-        let mut file = File::open(key_file).map_err(Error::IO)?;
-        let mut key_bytes = String::new();
-        file.read_to_string(&mut key_bytes).map_err(Error::IO)?;
-        let key = biscuit::PrivateKey::from_bytes_hex(&key_bytes).map_err(Error::BiscuitFormat)?;
-        Ok(biscuit::KeyPair::from(&key))
+    if *LOCAL {
+        let key_file = key_file(key_name);
+
+        if key_file.exists() {
+            // If key file exists, read the file
+            trace!("Reading key '{}' from <{}>…", key_name, key_file.display());
+            let mut file = File::open(key_file).map_err(Error::IO)?;
+            let mut key_bytes = String::new();
+            file.read_to_string(&mut key_bytes).map_err(Error::IO)?;
+            let key = biscuit::PrivateKey::from_bytes_hex(&key_bytes).map_err(Error::BiscuitFormat)?;
+            Ok(biscuit::KeyPair::from(&key))
+        } else {
+            // If key file does not exist, create a new key and save it to a new file
+            trace!("Saving new key '{}' into <{}>…", key_name, key_file.display());
+            let key_pair = biscuit::KeyPair::new();
+            let mut file = File::create(&key_file).map_err(Error::IO)?;
+            file.write_all(key_pair.private().to_bytes_hex().as_bytes()).map_err(Error::IO)?;
+            Ok(key_pair)
+        }
     } else {
-        // If key file does not exist, create a new key and save it to a new file
-        trace!("Saving new key '{}' into <{}>…", key_name, key_file.display());
-        let key_pair = biscuit::KeyPair::new();
-        let mut file = File::create(&key_file).map_err(Error::IO)?;
-        file.write_all(key_pair.private().to_bytes_hex().as_bytes()).map_err(Error::IO)?;
-        Ok(key_pair)
+        let env_var_name = format!("KEY_{}", key_name);
+        trace!("Reading key '{}' from environment ({})…", key_name, env_var_name);
+        env::var(env_var_name)
+            .map_err(Error::Env)
+            .and_then(|key_bytes| {
+                let key = biscuit::PrivateKey::from_bytes_hex(&key_bytes).map_err(Error::BiscuitFormat)?;
+                Ok(biscuit::KeyPair::from(&key))
+            })
     }
 }
 
@@ -771,7 +797,7 @@ fn key_file(key_name: &str) -> PathBuf {
 }
 
 fn decrypt(encrypted_data: Vec<u8>, key_name: &str) -> Result<Vec<u8>, Error> {
-    let key = get_key(key_name).map_err(Error::IO)?;
+    let key = get_key(key_name)?;
     let cipher = Aes256Gcm::new(&key);
 
     // Separate the nonce and ciphertext
@@ -803,6 +829,7 @@ fn matching_files<'a>(query: &str, stored_objects: &'a Vec<String>) -> Vec<&'a S
 #[derive(Debug)]
 enum Error {
     IO(io::Error),
+    Env(env::VarError),
     AES(aes_gcm::Error),
     BiscuitFormat(biscuit::error::Format),
     RusotoListObject(rusoto_core::RusotoError<rusoto_s3::ListObjectsV2Error>)
@@ -812,6 +839,7 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::IO(err) => err.fmt(f),
+            Error::Env(err) => err.fmt(f),
             Error::AES(err) => err.fmt(f),
             Error::BiscuitFormat(err) => err.fmt(f),
             Error::RusotoListObject(err) => err.fmt(f),

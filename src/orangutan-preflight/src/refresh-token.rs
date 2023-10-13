@@ -14,7 +14,7 @@ extern crate lazy_static;
 use log::{error, trace};
 use urlencoding::encode;
 
-const ROOT_KEY_NAME: &'static str = "_biscuit-root";
+const ROOT_KEY_NAME: &'static str = "_biscuit_root";
 
 lazy_static! {
     static ref BASE_DIR: &'static Path = Path::new(".orangutan");

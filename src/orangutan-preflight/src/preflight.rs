@@ -1,5 +1,6 @@
 use aes_gcm::aead::{Aead, AeadCore, KeyInit, OsRng};
 use aes_gcm::{Aes256Gcm, Key};
+use base64::{Engine as _, engine::general_purpose};
 use core::fmt;
 use std::collections::HashMap;
 use serde_json::{self, Value};
@@ -188,7 +189,13 @@ fn get_key(key_name: &str) -> Result<Key<Aes256Gcm>, io::Error> {
         // If key file exists, read the file
         trace!("Reading key '{}' from <{}>…", key_name, key_file.display());
         let mut file = File::open(key_file)?;
+
+        let mut buf: Vec<u8> = Vec::new();
+        file.read_to_end(&mut buf)?;
         let mut key_bytes = [0u8; 32];
+        // FIXME: Handle error
+        general_purpose::STANDARD.decode_slice(buf, &mut key_bytes).unwrap();
+
         file.read_exact(&mut key_bytes)?;
         let key: Key<Aes256Gcm> = key_bytes.into();
         keys.insert(key_name.to_string(), key);
@@ -197,8 +204,17 @@ fn get_key(key_name: &str) -> Result<Key<Aes256Gcm>, io::Error> {
         // If key file does not exist, create a new key and save it to a new file
         trace!("Saving new key '{}' into <{}>…", key_name, key_file.display());
         let key = Aes256Gcm::generate_key(OsRng);
+
+        // Encode key as base64
+        let mut buf: Vec<u8> = Vec::new();
+        // Make sure we'll have a slice big enough for base64 + padding
+        buf.resize(key.len() * 4 / 3 + 4, 0);
+        let bytes_written = general_purpose::STANDARD.encode_slice(key, &mut buf).unwrap();
+        // shorten our vec down to just what was written
+        buf.truncate(bytes_written);
+
         let mut file = File::create(&key_file)?;
-        file.write_all(&key)?;
+        file.write_all(&buf)?;
         keys.insert(key_name.to_string(), key);
         Ok(key)
     }
