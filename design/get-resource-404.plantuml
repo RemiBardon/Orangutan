@@ -1,0 +1,22 @@
+@startuml Getting a resource (404)
+' skinparam responseMessageBelowArrow true
+' autonumber
+
+actor Client
+participant "Back-end" as Back
+database "Object storage" as S3
+
+!$page = "/page.html"
+
+Client -> Back: ""GET $page""
+Back -> S3: ""GET $page"" object
+
+S3 -[#red]-> Back: ""404 Not Found""
+Back -> S3: List ""$page@*"" objects
+
+alt Private object does not exist
+	S3 -[#green]-> Back: ""[]""
+	Back -[#red]-> Client: ""404 Not Found""
+end
+
+@enduml

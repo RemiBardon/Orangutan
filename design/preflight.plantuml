@@ -1,0 +1,28 @@
+@startuml
+start
+:Create directories;
+:Generate blog;
+:Generate data files (JSON);
+:Remove files leaking information;
+
+while (For each data file)
+  :Read data file;
+  :Delete data file;
+  if (Access profiles defined) then
+    if (HTML file named like data file) then
+      while (For each profile with read access)
+        :Encrypt HTML file for profile;
+      endwhile
+      :Delete HTML file;
+    endif
+  endif
+endwhile
+
+while (For each remaining file)
+  note right
+    ["html", "json", "xml", "css", "js", "txt"]
+  end note
+  :Test;
+endwhile
+end
+@enduml

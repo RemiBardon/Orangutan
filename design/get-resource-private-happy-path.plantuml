@@ -1,0 +1,72 @@
+@startuml Getting an encrypted resource (happy path)
+' skinparam responseMessageBelowArrow true
+' autonumber
+
+actor Client
+participant "Back-end" as Back
+database S3
+
+!$page = "/page1.html"
+
+autonumber 1.1
+
+group Authentication
+	Client -> Back: ""GET /login"" (Basic Auth)
+	note right: Shared profile as username
+	alt Valid credentials
+		Back -> Back: Generate unique Biscuit
+		note left: With TTL and\nrevocation mechanism
+		Back -[#green]-> Client: Biscuit
+		Client -> Client: Store Biscuit in a cookie
+	end
+end
+
+... Time passes ...
+
+autonumber 2.1
+
+Client -> Back: ""GET $page""
+Back -> S3: ""GET $page"" object
+
+alt Public object does not exist
+
+	S3 -[#red]-> Back: ""404 Not Found""
+	Back -> S3: List ""$page@*"" objects
+
+	alt Private object(s) exist
+
+		S3 -[#green]-> Back: ""["$page@<profile1>",""\n"""$page@<profile2>"]""
+
+		Back -> Back: Read Bearer token
+		Back -> Back: Validate Biscuit
+		note left: Format, TTL, revocation…
+
+		alt Biscuit is valid
+
+			Back -> Back: Validate Biscuit against authorized profiles
+
+			alt Authorized profile present in Biscuit
+
+				Back -> Back: Read profile from Biscuit
+				Back -> Back: Read decryption key from environment
+				note left: Key associated to profile
+
+				alt Key found in environment
+
+					Back -> S3: ""GET $page@<profile>""
+					S3 -[#green]-> Back: ""$page@<profile>""
+					Back -> Back: Decrypt ""$page@<profile>""
+					note left: We suppose this never fails
+					Back -[#green]-> Client: ""$page""
+
+				end
+
+			end
+
+		end
+
+	end
+
+end
+
+@enduml
