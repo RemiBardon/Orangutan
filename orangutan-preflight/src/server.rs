@@ -1,4 +1,4 @@
-#![feature(proc_macro_hygiene, decl_macro)]
+#![feature(proc_macro_hygiene, decl_macro, never_type)]
 
 #[macro_use] extern crate rocket;
 
@@ -37,6 +37,7 @@ const BUCKET_NAME: &'static str = "orangutan";
 const ROOT_KEY_NAME: &'static str = "_biscuit-root";
 const TOKEN_COOKIE_NAME: &'static str = "token";
 const TOKEN_QUERY_PARAM_NAME: &'static str = "token";
+const REFRESH_TOKEN_QUERY_PARAM_NAME: &'static str = "refresh_token";
 // TODO: Make this a command-line argument
 const DRY_RUN: bool = true;
 const LOCAL: bool = true;
@@ -127,68 +128,15 @@ fn get_user_info(token: Option<Token>) -> String {
     }
 }
 
-#[get("/<_path..>?<refresh_token>")]
+#[get("/<_path..>")]
 fn handle_refresh_token<'a>(
     _path: PathBuf,
     origin: &Origin,
-    token: Option<Token>,
     mut cookies: Cookies,
-    mut refresh_token: String,
+    refreshed_token: RefreshedToken,
 ) -> Response<'a> {
-    debug!("Found refresh token query param");
-
-    let new_token: Token;
-    refresh_token = decode(&refresh_token).unwrap().to_string();
-    match Biscuit::from_base64(refresh_token, ROOT_KEY.public()) {
-        Ok(refresh_biscuit) => {
-            trace!("Checking if refresh token is valid or not");
-            let authorizer = authorizer!(
-                r#"
-                time({now});
-                allow if true;
-                "#,
-                now = SystemTime::now(),
-            );
-            if let Err(err) = refresh_biscuit.authorize(&authorizer) {
-                debug!("Refresh token is invalid: {}", err);
-                // FIXME: Send Unauthorized
-                panic!()
-            }
-
-            trace!("Baking biscuit from refresh token");
-            let source = refresh_biscuit.print_block_source(0).unwrap();
-            let mut builder = Biscuit::builder();
-            builder.add_code(source).unwrap();
-            match (token, builder.build(&ROOT_KEY)) {
-                (None, Ok(new_biscuit)) => {
-                    trace!("Created new biscuit from refresh token");
-                    new_token = Token { biscuit: new_biscuit, should_save: true };
-                },
-                (Some(Token { biscuit: acc, .. }), Ok(b)) => {
-                    trace!("Making bigger biscuit from refresh token");
-                    if let Some(new_biscuit) = merge_biscuits(&acc, &b) {
-                        new_token = Token { biscuit: new_biscuit, should_save: true };
-                    } else {
-                        // FIXME: Send Unauthorized
-                        panic!()
-                    }
-                },
-                (_, Err(err)) => {
-                    debug!("Error: Could not append block to biscuit: {}", err);
-                    // FIXME: Send Unauthorized
-                    panic!()
-                },
-            }
-        },
-        Err(err) => {
-            debug!("Error decoding biscuit from base64: {}", err);
-            // FIXME: Send Unauthorized
-            panic!()
-        },
-    }
-
     // Save token to a Cookie if necessary
-    add_cookie_if_necessary(&new_token, &mut cookies);
+    add_cookie_if_necessary(&refreshed_token.0, &mut cookies);
 
     // Redirect to the same page without the refresh token query param
     // FIXME: Do not clear the whole query
@@ -203,7 +151,7 @@ fn handle_refresh_token<'a>(
         .finalize()
 }
 
-#[get("/<_path..>")]
+#[get("/<_path..>", rank = 2)]
 fn handle_request_authenticated<'a>(
     _path: PathBuf,
     origin: &Origin,
@@ -214,7 +162,7 @@ fn handle_request_authenticated<'a>(
     _handle_request(origin, Some(&token.biscuit))
 }
 
-#[get("/<_path..>", rank = 2)]
+#[get("/<_path..>", rank = 3)]
 fn handle_request<'a>(_path: PathBuf, origin: &Origin) -> Response<'a> {
     _handle_request(origin, None)
 }
@@ -527,6 +475,78 @@ impl<'a, 'r> FromRequest<'a, 'r> for Token {
         match biscuit {
             Some(biscuit) => Outcome::Success(Token { biscuit, should_save }),
             None => Outcome::Forward(()),
+        }
+    }
+}
+
+struct RefreshedToken(Token);
+
+impl<'a, 'r> FromRequest<'a, 'r> for RefreshedToken {
+    type Error = !;
+
+    fn from_request(request: &'a Request<'r>) -> request::Outcome<Self, Self::Error> {
+        let Some(refresh_token) = request.get_query_value::<String>(REFRESH_TOKEN_QUERY_PARAM_NAME) else {
+            debug!("Refresh token query param not found.");
+            return Outcome::Forward(())
+        };
+        let Ok(mut refresh_token) = refresh_token else {
+            debug!("Error: Refresh token query param could not be decoded as `String`.");
+            return Outcome::Forward(())
+        };
+
+        debug!("Found refresh token query param");
+
+        let token = Token::from_request(request).succeeded();
+
+        refresh_token = decode(&refresh_token).unwrap().to_string();
+        match Biscuit::from_base64(refresh_token, ROOT_KEY.public()) {
+            Ok(refresh_biscuit) => {
+                trace!("Checking if refresh token is valid or not");
+                let authorizer = authorizer!(
+                    r#"
+                    time({now});
+                    allow if true;
+                    "#,
+                    now = SystemTime::now(),
+                );
+                if let Err(err) = refresh_biscuit.authorize(&authorizer) {
+                    debug!("Refresh token is invalid: {}", err);
+                    return Outcome::Forward(())
+                }
+
+                trace!("Baking biscuit from refresh token");
+                let source = refresh_biscuit.print_block_source(0).unwrap();
+                let mut builder = Biscuit::builder();
+                builder.add_code(source).unwrap();
+                match (token, builder.build(&ROOT_KEY)) {
+                    (None, Ok(new_biscuit)) => {
+                        trace!("Created new biscuit from refresh token");
+                        Outcome::Success(RefreshedToken(Token {
+                            biscuit: new_biscuit,
+                            should_save: true,
+                        }))
+                    },
+                    (Some(Token { biscuit: acc, .. }), Ok(b)) => {
+                        trace!("Making bigger biscuit from refresh token");
+                        if let Some(new_biscuit) = merge_biscuits(&acc, &b) {
+                            Outcome::Success(RefreshedToken(Token {
+                                biscuit: new_biscuit,
+                                should_save: true,
+                            }))
+                        } else {
+                            Outcome::Forward(())
+                        }
+                    },
+                    (_, Err(err)) => {
+                        debug!("Error: Could not append block to biscuit: {}", err);
+                        Outcome::Forward(())
+                    },
+                }
+            },
+            Err(err) => {
+                debug!("Error decoding biscuit from base64: {}", err);
+                Outcome::Forward(())
+            },
         }
     }
 }
