@@ -112,6 +112,7 @@ fn throwing_main() -> Result<(), std::io::Error> {
 #[get("/")]
 fn get_index<'a>(origin: &Origin) -> Response<'a> {
     _handle_request(origin, None)
+        .unwrap_or_else(|e| e)
 }
 
 #[get("/_info")]
@@ -159,42 +160,28 @@ fn handle_request_authenticated<'a>(
 ) -> Response<'a> {
     add_cookie_if_necessary(&token, &mut cookies);
     _handle_request(origin, Some(&token.biscuit))
+        .unwrap_or_else(|e| e)
 }
 
 #[get("/<_path..>", rank = 3)]
 fn handle_request<'a>(_path: PathBuf, origin: &'a Origin<'a>) -> Response<'a> {
     _handle_request(origin, None)
+        .unwrap_or_else(|e| e)
 }
 
-fn _handle_request<'a>(origin: &Origin<'_>, biscuit: Option<&Biscuit>) -> Response<'a> {
+fn _handle_request<'a>(origin: &Origin<'_>, biscuit: Option<&Biscuit>) -> Result<Response<'a>, Response<'a>> {
     let path = decode(origin.path()).unwrap().into_owned();
     trace!("GET {}", &path);
-
-    fn serve_file<'a>(file_path: PathBuf) -> Result<Vec<u8>, Response<'a>> {
-        if let Ok(mut file) = File::open(&file_path) {
-            let mut data: Vec<u8> = Vec::new();
-            if let Err(err) = file.read_to_end(&mut data) {
-                return Err(Response::build()
-                    .sized_body(Cursor::new(format!("Dry run failed: Could not read <{}> from disk: {}", file_path.display(), err)))
-                    .finalize())
-            }
-            return Ok(data)
-        } else {
-            return Err(Response::build()
-                .sized_body(Cursor::new(format!("Dry run failed: Could not read <{}> from disk: Cannot open file", file_path.display())))
-                .finalize())
-        }
-    }
 
     let stored_objects: Vec<String>;
     match list_objects(&path) {
         Ok(o) => stored_objects = o,
         Err(err) => {
             error!("Error when listing objects matching '{}': {}", &path, err);
-            return Response::build()
+            return Err(Response::build()
                 .status(Status::NotFound)
                 .sized_body(Cursor::new("Object not found"))
-                .finalize()
+                .finalize())
         }
     }
 
@@ -206,14 +193,14 @@ fn _handle_request<'a>(origin: &Origin<'_>, biscuit: Option<&Biscuit>) -> Respon
         let file_path = WEBSITE_DIR.join(path.strip_prefix("/").unwrap());
         return match serve_file(file_path) {
             Ok(data) => {
-                Response::build().sized_body(Cursor::new(data)).finalize()
+                Ok(Response::build().sized_body(Cursor::new(data)).finalize())
             },
             Err(err) => {
                 debug!("Error reading static file: {:?}", err);
-                Response::build()
+                Err(Response::build()
                     .status(Status::InternalServerError)
                     .sized_body(Cursor::new("Internal Server Error"))
-                    .finalize()
+                    .finalize())
             },
         }
     }
@@ -247,12 +234,12 @@ fn _handle_request<'a>(origin: &Origin<'_>, biscuit: Option<&Biscuit>) -> Respon
     }
     let Some(profile) = profile else {
         debug!("Basic authentication disabled");
-        return Response::build()
+        return Err(Response::build()
             .status(Status::Unauthorized)
             // TODO: Re-enable Basic authentication
             // .raw_header("WWW-Authenticate", "Basic realm=\"This page is protected. Please log in.\"")
             .sized_body(Cursor::new("This page doesn't exist or you are not allowed to see it."))
-            .finalize()
+            .finalize())
     };
 
     // NOTE: Cannot use `if let Some(object_key)` as it causes
@@ -262,19 +249,51 @@ fn _handle_request<'a>(origin: &Origin<'_>, biscuit: Option<&Biscuit>) -> Respon
         Some(key) => object_key = key,
         None => {
             debug!("No object matching '{}' in {:?}", &path, stored_objects);
-            return Response::build()
+            return Err(Response::build()
                 .status(Status::NotFound)
                 .sized_body(Cursor::new("Object not found"))
-                .finalize()
+                .finalize())
         }
     }
 
+    let data: Vec<u8> = read_object(object_key)?;
+
+    match decrypt(data, profile) {
+        Ok(decrypted_data) => {
+            Ok(Response::build().sized_body(Cursor::new(decrypted_data)).finalize())
+        },
+        Err(err) => {
+            debug!("Error decrypting file: {:?}", err);
+            Err(Response::build()
+                .status(Status::InternalServerError)
+                .sized_body(Cursor::new("Internal Server Error"))
+                .finalize())
+        },
+    }
+}
+
+fn serve_file<'a>(file_path: PathBuf) -> Result<Vec<u8>, Response<'a>> {
+    if let Ok(mut file) = File::open(&file_path) {
+        let mut data: Vec<u8> = Vec::new();
+        if let Err(err) = file.read_to_end(&mut data) {
+            return Err(Response::build()
+                .sized_body(Cursor::new(format!("Dry run failed: Could not read <{}> from disk: {}", file_path.display(), err)))
+                .finalize())
+        }
+        return Ok(data)
+    } else {
+        return Err(Response::build()
+            .sized_body(Cursor::new(format!("Dry run failed: Could not read <{}> from disk: Cannot open file", file_path.display())))
+            .finalize())
+    }
+}
+
+fn read_object<'a>(object_key: &str) -> Result<Vec<u8>, Response<'a>> {
     let s3_req = GetObjectRequest {
         bucket: BUCKET_NAME.to_string(),
-        key: object_key.to_owned(),
+        key: object_key.to_string(),
         ..Default::default()
     };
-    let data: Vec<u8>;
 
     if *DRY_RUN || *LOCAL {
         debug!("[DRY_RUN] Get object '{}' from bucket '{}'", &s3_req.key, s3_req.bucket);
@@ -282,12 +301,9 @@ fn _handle_request<'a>(origin: &Origin<'_>, biscuit: Option<&Biscuit>) -> Respon
         let file_path = WEBSITE_DIR.join(&s3_req.key.strip_prefix("/").unwrap());
         debug!("[DRY_RUN] Reading '{}' from disk at <{}>", &s3_req.key, file_path.display());
 
-        match serve_file(file_path) {
-            Ok(_data) => data = _data,
-            Err(response) => return response,
-        }
+        serve_file(file_path)
     } else {
-        match TOKIO_RUNTIME.block_on(S3_CLIENT.get_object(s3_req))
+        TOKIO_RUNTIME.block_on(S3_CLIENT.get_object(s3_req))
             .map(|output| {
                 let mut data: Vec<u8> = Vec::new();
                 output.body.unwrap()
@@ -295,29 +311,14 @@ fn _handle_request<'a>(origin: &Origin<'_>, biscuit: Option<&Biscuit>) -> Respon
                     .read_to_end(&mut data)
                     .expect("Failed to read ByteStream");
                 data
-            }) {
-            Ok(_data) => data = _data,
-            Err(err) => {
+            })
+            .map_err(|err| {
                 debug!("Error getting S3 object: {}", err);
                 return Response::build()
                     .status(Status::NotFound)
                     .sized_body(Cursor::new("Object not found"))
                     .finalize()
-            },
-        }
-    }
-
-    match decrypt(data, profile) {
-        Ok(decrypted_data) => {
-            Response::build().sized_body(Cursor::new(decrypted_data)).finalize()
-        },
-        Err(err) => {
-            debug!("Error decrypting file: {:?}", err);
-            Response::build()
-                .status(Status::InternalServerError)
-                .sized_body(Cursor::new("Internal Server Error"))
-                .finalize()
-        },
+            })
     }
 }
 
