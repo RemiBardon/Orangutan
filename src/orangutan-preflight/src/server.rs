@@ -180,10 +180,7 @@ fn _handle_request<'a>(origin: &Origin<'_>, biscuit: Option<&Biscuit>) -> Result
         Ok(o) => stored_objects = o,
         Err(err) => {
             error!("Error when listing objects matching '{}': {}", &path, err);
-            return Err(Response::build()
-                .status(Status::NotFound)
-                .sized_body(Cursor::new("Object not found"))
-                .finalize())
+            return Err(not_found())
         }
     }
 
@@ -240,12 +237,7 @@ fn _handle_request<'a>(origin: &Origin<'_>, biscuit: Option<&Biscuit>) -> Result
     }
     let Some(profile) = profile else {
         debug!("Basic authentication disabled");
-        return Err(Response::build()
-            .status(Status::Unauthorized)
-            // TODO: Re-enable Basic authentication
-            // .raw_header("WWW-Authenticate", "Basic realm=\"This page is protected. Please log in.\"")
-            .sized_body(Cursor::new("This page doesn't exist or you are not allowed to see it."))
-            .finalize())
+        return Err(not_found())
     };
 
     // NOTE: Cannot use `if let Some(object_key)` as it causes
@@ -255,10 +247,7 @@ fn _handle_request<'a>(origin: &Origin<'_>, biscuit: Option<&Biscuit>) -> Result
         Some(key) => object_key = key,
         None => {
             debug!("No object matching '{}' in {:?}", &path, stored_objects);
-            return Err(Response::build()
-                .status(Status::NotFound)
-                .sized_body(Cursor::new("Object not found"))
-                .finalize())
+            return Err(not_found())
         }
     }
 
@@ -276,6 +265,15 @@ fn _handle_request<'a>(origin: &Origin<'_>, biscuit: Option<&Biscuit>) -> Result
                 .finalize())
         },
     }
+}
+
+fn not_found<'a>() -> Response<'a> {
+    Response::build()
+        .status(Status::NotFound)
+        // TODO: Re-enable Basic authentication
+        // .raw_header("WWW-Authenticate", "Basic realm=\"This page is protected. Please log in.\"")
+        .sized_body(Cursor::new("This page doesn't exist or you are not allowed to see it."))
+        .finalize()
 }
 
 trait ObjectReader {
@@ -339,10 +337,7 @@ impl ObjectReader for S3ObjectReader {
             })
             .map_err(|err| {
                 error!("Error getting S3 object: {}", err);
-                Response::build()
-                    .status(Status::NotFound)
-                    .sized_body(Cursor::new("Object not found"))
-                    .finalize()
+                not_found()
             })
     }
 }
@@ -354,15 +349,13 @@ impl LocalObjectReader {
         if let Ok(mut file) = File::open(&file_path) {
             let mut data: Vec<u8> = Vec::new();
             if let Err(err) = file.read_to_end(&mut data) {
-                return Err(Response::build()
-                    .sized_body(Cursor::new(format!("Dry run failed: Could not read <{}> from disk: {}", file_path.display(), err)))
-                    .finalize())
+                debug!("Could not read <{}> from disk: {}", file_path.display(), err);
+                return Err(not_found())
             }
-            return Ok(data)
+            Ok(data)
         } else {
-            return Err(Response::build()
-                .sized_body(Cursor::new(format!("Dry run failed: Could not read <{}> from disk: Cannot open file", file_path.display())))
-                .finalize())
+            debug!("Could not read <{}> from disk: Cannot open file", file_path.display());
+            Err(not_found())
         }
     }
 }
