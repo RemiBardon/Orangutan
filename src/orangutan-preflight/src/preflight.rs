@@ -56,20 +56,20 @@ fn throwing_main() -> Result<(), Error> {
     copy_directory(shortcodes_dir, shortcodes_dest_dir).unwrap();
 
     // Generate the website
-    hugo(vec!["--disableKinds", "RSS,sitemap", "--cleanDestinationDir", "--baseURL", "http://localhost:8080"]).map_err(Error::IO)?;
+    hugo(vec!["--disableKinds", "RSS,sitemap", "--cleanDestinationDir", "--baseURL", "http://localhost:8080"]).map_err(Error::CannotGenerateWebsite)?;
     // Generate Orangutan data files
-    hugo(vec!["--disableKinds", "RSS,sitemap,home", "--theme", THEME_NAME]).map_err(Error::IO)?;
+    hugo(vec!["--disableKinds", "RSS,sitemap,home", "--theme", THEME_NAME]).map_err(Error::CannotGenerateDataFiles)?;
 
     // Temporary fix to avoid leakage of page existence and content
     // TODO(RemiBardon): Find a solution to avoid removing this file
-    empty_index_json().map_err(Error::IO)?;
+    empty_index_json().map_err(Error::CannotEmptyIndexJson)?;
 
     // Encrypt all files with read profiles explicitly defined, then delete the originals
     for data_file in find_data_files() {
         debug!("{}", data_file.display());
 
         let read_access_profiles = read_access_profiles(&data_file);
-        fs::remove_file(&data_file).map_err(Error::IO)?;
+        fs::remove_file(&data_file).map_err(|e| Error::CannotDeleteFile(data_file.clone(), e))?;
 
         if let Some(read_profiles) = read_access_profiles {
             debug!("  read_profiles: {:?}", read_profiles);
@@ -84,14 +84,14 @@ fn throwing_main() -> Result<(), Error> {
                 encrypt_file(&html_file, &profile)?;
             }
 
-            fs::remove_file(html_file).map_err(Error::IO)?;
+            fs::remove_file(&html_file).map_err(|e| Error::CannotDeleteFile(html_file.clone(), e))?;
         }
     }
 
     // Encrypt all remaining files with default profile, then delete the originals
     for file in find_remaining_files() {
         encrypt_file(&file, DEFAULT_PROFILE)?;
-        fs::remove_file(file).map_err(Error::IO)?;
+        fs::remove_file(&file).map_err(|e| Error::CannotDeleteFile(file.clone(), e))?;
     }
 
     Ok(())
@@ -189,8 +189,8 @@ fn encrypt_file(in_file: &PathBuf, key_name: &str) -> Result<(), Error> {
     // Read file contents
     let mut plaintext = String::new();
     {
-        let mut file = File::open(in_file).map_err(Error::IO)?;
-        file.read_to_string(&mut plaintext).map_err(Error::IO)?;
+        let mut file = File::open(in_file).map_err(|e| Error::CannotOpenFile(in_file.clone(), e))?;
+        file.read_to_string(&mut plaintext).map_err(|e| Error::CannotReadFile(in_file.clone(), e))?;
     }
 
     // Encrypt the text
@@ -202,9 +202,9 @@ fn encrypt_file(in_file: &PathBuf, key_name: &str) -> Result<(), Error> {
 
     // Save the encrypted text to a file
     {
-        let mut file = File::create(&out_file).map_err(Error::IO)?;
-        file.write_all(&nonce).map_err(Error::IO)?;
-        file.write_all(&ciphertext).map_err(Error::IO)?;
+        let mut file = File::create(&out_file).map_err(|e| Error::CannotCreateFile(out_file.clone(), e))?;
+        file.write_all(&nonce).map_err(|e| Error::CannotWriteInFile(out_file.clone(), e))?;
+        file.write_all(&ciphertext).map_err(|e| Error::CannotWriteInFile(out_file.clone(), e))?;
     }
 
     Ok(())
@@ -270,10 +270,10 @@ impl KeysReader for LocalKeysReader {
         if key_file.exists() {
             // If key file exists, read the file
             trace!("Reading key '{}' from <{}>…", key_name, key_file.display());
-            let mut file = File::open(key_file).map_err(Error::IO)?;
+            let mut file = File::open(&key_file).map_err(|e| Error::CannotOpenFile(key_file.clone(), e))?;
 
             let mut buf: Vec<u8> = Vec::new();
-            file.read_to_end(&mut buf).map_err(Error::IO)?;
+            file.read_to_end(&mut buf).map_err(|e| Error::CannotReadFile(key_file.clone(), e))?;
             // FIXME: Handle error
             let key = general_purpose::STANDARD.decode(buf).unwrap();
             // FIXME: Handle error
@@ -295,8 +295,8 @@ impl KeysReader for LocalKeysReader {
             // shorten our vec down to just what was written
             buf.truncate(bytes_written);
 
-            let mut file = File::create(&key_file).map_err(Error::IO)?;
-            file.write_all(&buf).map_err(Error::IO)?;
+            let mut file = File::create(&key_file).map_err(|e| Error::CannotCreateFile(key_file.clone(), e))?;
+            file.write_all(&buf).map_err(|e| Error::CannotWriteInFile(key_file.clone(), e))?;
             keys.insert(key_name.to_string(), key);
             Ok(key)
         }
@@ -314,17 +314,31 @@ fn create_directory(directory: &Path) {
 
 #[derive(Debug)]
 enum Error {
-    IO(io::Error),
     Env(env::VarError),
     AES(aes_gcm::Error),
+    CannotGenerateWebsite(io::Error),
+    CannotGenerateDataFiles(io::Error),
+    CannotEmptyIndexJson(io::Error),
+    CannotCreateFile(PathBuf, io::Error),
+    CannotOpenFile(PathBuf, io::Error),
+    CannotWriteInFile(PathBuf, io::Error),
+    CannotReadFile(PathBuf, io::Error),
+    CannotDeleteFile(PathBuf, io::Error),
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::IO(err) => err.fmt(f),
             Error::Env(err) => err.fmt(f),
             Error::AES(err) => err.fmt(f),
+            Error::CannotGenerateWebsite(err) => write!(f, "Could not generate website: {err}"),
+            Error::CannotGenerateDataFiles(err) => write!(f, "Could not generate data files: {err}"),
+            Error::CannotEmptyIndexJson(err) => write!(f, "Could not empty <index.json> file: {err}"),
+            Error::CannotCreateFile(path, err) => write!(f, "Could not create <{}> file: {err}", path.display()),
+            Error::CannotOpenFile(path, err) => write!(f, "Could not open <{}> file: {err}", path.display()),
+            Error::CannotWriteInFile(path, err) => write!(f, "Could not write in <{}> file: {err}", path.display()),
+            Error::CannotReadFile(path, err) => write!(f, "Could not read <{}> file: {err}", path.display()),
+            Error::CannotDeleteFile(path, err) => write!(f, "Could not delete <{}> file: {err}", path.display()),
         }
     }
 }
