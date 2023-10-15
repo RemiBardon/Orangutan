@@ -40,7 +40,7 @@ const REFRESH_TOKEN_QUERY_PARAM_NAME: &'static str = "refresh_token";
 
 lazy_static! {
     // TODO: Make this a command-line argument
-    static ref DRY_RUN: bool = env::var("DRY_RUN").map_or(true, |v| v == "true");
+    static ref MODE: Result<String, env::VarError> = env::var("MODE");
     static ref LOCAL: bool = env::var("RUN_LOCALLY").map_or(true, |v| v == "true");
 
     static ref BASE_DIR: &'static Path = Path::new(".orangutan");
@@ -173,8 +173,10 @@ fn _handle_request<'a>(origin: &Origin<'_>, biscuit: Option<&Biscuit>) -> Result
     let path = decode(origin.path()).unwrap().into_owned();
     trace!("GET {}", &path);
 
+    let object_reader = <dyn ObjectReader>::detect();
+
     let stored_objects: Vec<String>;
-    match list_objects(&path) {
+    match object_reader.list_objects(&path) {
         Ok(o) => stored_objects = o,
         Err(err) => {
             error!("Error when listing objects matching '{}': {}", &path, err);
@@ -190,19 +192,23 @@ fn _handle_request<'a>(origin: &Origin<'_>, biscuit: Option<&Biscuit>) -> Result
     let allowed_profiles = matching_files.iter().flat_map(|f| f.rsplit_terminator("@").next());
     if allowed_profiles.clone().next() == None {
         // If allowed profiles is empty, it means it's a static file
-        let file_path = WEBSITE_DIR.join(path.strip_prefix("/").unwrap());
-        return match serve_file(file_path) {
-            Ok(data) => {
-                Ok(Response::build().sized_body(Cursor::new(data)).finalize())
-            },
-            Err(err) => {
-                debug!("Error reading static file: {:?}", err);
-                Err(Response::build()
-                    .status(Status::InternalServerError)
-                    .sized_body(Cursor::new("Internal Server Error"))
-                    .finalize())
-            },
-        }
+        return object_reader.read_object(&path)
+            .map(|data| {
+                Response::build().sized_body(Cursor::new(data)).finalize()
+            });
+        // let file_path = WEBSITE_DIR.join(path.strip_prefix("/").unwrap());
+        // return match LocalObjectReader::serve_file(file_path) {
+        //     Ok(data) => {
+        //         Ok(Response::build().sized_body(Cursor::new(data)).finalize())
+        //     },
+        //     Err(err) => {
+        //         debug!("Error reading static file: {:?}", err);
+        //         Err(Response::build()
+        //             .status(Status::InternalServerError)
+        //             .sized_body(Cursor::new("Internal Server Error"))
+        //             .finalize())
+        //     },
+        // }
     }
     debug!(
         "Page <{}> can be read by {}",
@@ -256,7 +262,7 @@ fn _handle_request<'a>(origin: &Origin<'_>, biscuit: Option<&Biscuit>) -> Result
         }
     }
 
-    let data: Vec<u8> = read_object(object_key)?;
+    let data: Vec<u8> = object_reader.read_object(object_key)?;
 
     match decrypt(data, profile) {
         Ok(decrypted_data) => {
@@ -272,37 +278,59 @@ fn _handle_request<'a>(origin: &Origin<'_>, biscuit: Option<&Biscuit>) -> Result
     }
 }
 
-fn serve_file<'a>(file_path: PathBuf) -> Result<Vec<u8>, Response<'a>> {
-    if let Ok(mut file) = File::open(&file_path) {
-        let mut data: Vec<u8> = Vec::new();
-        if let Err(err) = file.read_to_end(&mut data) {
-            return Err(Response::build()
-                .sized_body(Cursor::new(format!("Dry run failed: Could not read <{}> from disk: {}", file_path.display(), err)))
-                .finalize())
-        }
-        return Ok(data)
-    } else {
-        return Err(Response::build()
-            .sized_body(Cursor::new(format!("Dry run failed: Could not read <{}> from disk: Cannot open file", file_path.display())))
-            .finalize())
+trait ObjectReader {
+    fn list_objects(&self, prefix: &str) -> Result<Vec<String>, Error>;
+    fn read_object<'a>(&self, object_key: &str) -> Result<Vec<u8>, Response<'a>>;
+}
+
+impl dyn ObjectReader {
+    fn detect() -> Box<dyn ObjectReader> {
+        MODE.clone().map_or(Box::new(LocalObjectReader {}), |v| {
+            match v.as_str() {
+                "S3" => Box::new(S3ObjectReader {}),
+                "LOCAL" => Box::new(LocalObjectReader {}),
+                _ => Box::new(LocalObjectReader {}),
+            }
+        })
     }
 }
 
-fn read_object<'a>(object_key: &str) -> Result<Vec<u8>, Response<'a>> {
-    let s3_req = GetObjectRequest {
-        bucket: BUCKET_NAME.to_string(),
-        key: object_key.to_string(),
-        ..Default::default()
-    };
+struct S3ObjectReader {}
 
-    if *DRY_RUN || *LOCAL {
-        debug!("[DRY_RUN] Get object '{}' from bucket '{}'", &s3_req.key, s3_req.bucket);
+impl ObjectReader for S3ObjectReader {
+    fn list_objects(&self, prefix: &str) -> Result<Vec<String>, Error> {
+        let s3_req = ListObjectsV2Request {
+            bucket: BUCKET_NAME.to_string(),
+            prefix: Some(prefix.to_string()),
+            ..Default::default()
+        };
+        trace!("Listing objects with prefix '{}' from bucket '{}'…", prefix, s3_req.bucket);
 
-        let file_path = WEBSITE_DIR.join(&s3_req.key.strip_prefix("/").unwrap());
-        debug!("[DRY_RUN] Reading '{}' from disk at <{}>", &s3_req.key, file_path.display());
+        TOKIO_RUNTIME.block_on(S3_CLIENT.list_objects_v2(s3_req))
+            .map(|output| {
+                if let Some(objects) = output.contents {
+                    debug!("Found objects: {:?}", objects);
+                    objects.iter().flat_map(|o| o.key.clone()).collect()
+                } else {
+                    debug!("No object sent back from S3");
+                    // FIXME: Return error
+                    Vec::new()
+                }
+            })
+            .map_err(|err| {
+                error!("Error listing S3 objects: {}", err);
+                Error::RusotoListObject(err)
+            })
+    }
 
-        serve_file(file_path)
-    } else {
+    fn read_object<'a>(&self, object_key: &str) -> Result<Vec<u8>, Response<'a>> {
+        let s3_req = GetObjectRequest {
+            bucket: BUCKET_NAME.to_string(),
+            key: object_key.to_string(),
+            ..Default::default()
+        };
+        trace!("Getting object '{}' from bucket '{}'…", &s3_req.key, s3_req.bucket);
+
         TOKIO_RUNTIME.block_on(S3_CLIENT.get_object(s3_req))
             .map(|output| {
                 let mut data: Vec<u8> = Vec::new();
@@ -313,12 +341,53 @@ fn read_object<'a>(object_key: &str) -> Result<Vec<u8>, Response<'a>> {
                 data
             })
             .map_err(|err| {
-                debug!("Error getting S3 object: {}", err);
-                return Response::build()
+                error!("Error getting S3 object: {}", err);
+                Response::build()
                     .status(Status::NotFound)
                     .sized_body(Cursor::new("Object not found"))
                     .finalize()
             })
+    }
+}
+
+struct LocalObjectReader {}
+
+impl LocalObjectReader {
+    fn serve_file<'a>(file_path: PathBuf) -> Result<Vec<u8>, Response<'a>> {
+        if let Ok(mut file) = File::open(&file_path) {
+            let mut data: Vec<u8> = Vec::new();
+            if let Err(err) = file.read_to_end(&mut data) {
+                return Err(Response::build()
+                    .sized_body(Cursor::new(format!("Dry run failed: Could not read <{}> from disk: {}", file_path.display(), err)))
+                    .finalize())
+            }
+            return Ok(data)
+        } else {
+            return Err(Response::build()
+                .sized_body(Cursor::new(format!("Dry run failed: Could not read <{}> from disk: Cannot open file", file_path.display())))
+                .finalize())
+        }
+    }
+}
+
+impl ObjectReader for LocalObjectReader {
+    fn list_objects(&self, prefix: &str) -> Result<Vec<String>, Error> {
+        trace!("Listing files with prefix '{}' in <{}>…", prefix, WEBSITE_DIR.display());
+        Ok(find_all_files().iter()
+            .map(|path|
+                format!("/{}", path
+                    .strip_prefix(WEBSITE_DIR.as_path())
+                    .expect("Could not remove prefix")
+                    .display())
+            )
+            .collect())
+    }
+
+    fn read_object<'a>(&self, object_key: &str) -> Result<Vec<u8>, Response<'a>> {
+        let file_path = WEBSITE_DIR.join(object_key.strip_prefix("/").unwrap());
+        trace!("Reading '{}' from disk at <{}>…", object_key, file_path.display());
+
+        Self::serve_file(file_path)
     }
 }
 
@@ -655,46 +724,6 @@ fn merge_biscuits(b1: &Biscuit, b2: &Biscuit) -> Option<Biscuit> {
 //     todo!()
 // }
 
-fn list_objects(prefix: &str) -> Result<Vec<String>, Error> {
-    let s3_req = ListObjectsV2Request {
-        bucket: BUCKET_NAME.to_string(),
-        prefix: Some(prefix.to_string()),
-        ..Default::default()
-    };
-
-    if *DRY_RUN || *LOCAL {
-        debug!("[DRY_RUN] Listing objects with prefix '{}' from bucket '{}'", s3_req.prefix.unwrap(), s3_req.bucket);
-        debug!("[DRY_RUN] Reading files in <{}> instead", WEBSITE_DIR.display());
-        Ok(find_all_files().iter()
-            .map(|path|
-                format!("/{}", path
-                    .strip_prefix(WEBSITE_DIR.as_path())
-                    .expect("Could not remove prefix")
-                    .display())
-            )
-            .collect())
-    } else {
-        TOKIO_RUNTIME.block_on(async {
-            match S3_CLIENT.list_objects_v2(s3_req).await {
-                Ok(output) => {
-                    if let Some(objects) = output.contents {
-                        debug!("Found objects: {:?}", objects);
-                        Ok(objects.iter().flat_map(|o| o.key.clone()).collect())
-                    } else {
-                        debug!("No object sent back from S3");
-                        // FIXME: Return error
-                        Ok(Vec::new())
-                    }
-                },
-                Err(err) => {
-                    debug!("Error listing S3 objects: {}", err);
-                    Err(Error::RusotoListObject(err))
-                },
-            }
-        })
-    }
-}
-
 fn find_all_files() -> Vec<PathBuf> {
     let mut files: Vec<PathBuf> = Vec::new();
     find(&WEBSITE_DIR, &mut files);
@@ -728,8 +757,14 @@ fn get_key(key_name: &str) -> Result<Key<Aes256Gcm>, Error> {
             // If key file exists, read the file
             trace!("Reading key '{}' from <{}>…", key_name, key_file.display());
             let mut file = File::open(key_file).map_err(Error::IO)?;
-            let mut key_bytes = [0u8; 32];
-            file.read_exact(&mut key_bytes).map_err(Error::IO)?;
+
+            let mut buf: Vec<u8> = Vec::new();
+            file.read_to_end(&mut buf).map_err(Error::IO)?;
+            // FIXME: Handle error
+            let key = general_purpose::STANDARD.decode(buf).unwrap();
+            // FIXME: Handle error
+            let key_bytes: [u8; 32] = key.as_slice().try_into().unwrap();
+    
             let key: Key<Aes256Gcm> = key_bytes.into();
             keys.insert(key_name.to_string(), key);
             Ok(key)
@@ -737,8 +772,17 @@ fn get_key(key_name: &str) -> Result<Key<Aes256Gcm>, Error> {
             // If key file does not exist, create a new key and save it to a new file
             trace!("Saving new key '{}' into <{}>…", key_name, key_file.display());
             let key = Aes256Gcm::generate_key(OsRng);
+    
+            // Encode key as base64
+            let mut buf: Vec<u8> = Vec::new();
+            // Make sure we'll have a slice big enough for base64 + padding
+            buf.resize(key.len() * 4 / 3 + 4, 0);
+            let bytes_written = general_purpose::STANDARD.encode_slice(key, &mut buf).unwrap();
+            // shorten our vec down to just what was written
+            buf.truncate(bytes_written);
+    
             let mut file = File::create(&key_file).map_err(Error::IO)?;
-            file.write_all(&key).map_err(Error::IO)?;
+            file.write_all(&buf).map_err(Error::IO)?;
             keys.insert(key_name.to_string(), key);
             Ok(key)
         }
@@ -748,10 +792,10 @@ fn get_key(key_name: &str) -> Result<Key<Aes256Gcm>, Error> {
         env::var(env_var_name)
             .map_err(Error::Env)
             .and_then(|key_base64| {
-                let mut key_bytes = [0u8; 32];
                 // FIXME: Handle error
-                general_purpose::STANDARD.decode_slice(key_base64, &mut key_bytes).unwrap();
+                let key = general_purpose::STANDARD.decode(key_base64).unwrap();
 
+                let key_bytes: [u8; 32] = key.as_slice().try_into().unwrap();
                 let key: Key<Aes256Gcm> = key_bytes.into();
                 keys.insert(key_name.to_string(), key);
                 Ok(key)

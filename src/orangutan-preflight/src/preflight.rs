@@ -192,11 +192,11 @@ fn get_key(key_name: &str) -> Result<Key<Aes256Gcm>, io::Error> {
 
         let mut buf: Vec<u8> = Vec::new();
         file.read_to_end(&mut buf)?;
-        let mut key_bytes = [0u8; 32];
         // FIXME: Handle error
-        general_purpose::STANDARD.decode_slice(buf, &mut key_bytes).unwrap();
+        let key = general_purpose::STANDARD.decode(buf).unwrap();
+        // FIXME: Handle error
+        let key_bytes: [u8; 32] = key.as_slice().try_into().unwrap();
 
-        file.read_exact(&mut key_bytes)?;
         let key: Key<Aes256Gcm> = key_bytes.into();
         keys.insert(key_name.to_string(), key);
         Ok(key)
