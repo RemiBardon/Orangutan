@@ -48,6 +48,13 @@ fn throwing_main() -> Result<(), Error> {
     create_directory(&DEST_DIR);
     create_directory(&KEYS_DIR);
 
+    // Copy Some files if needed
+    // FIXME: Do not hardcode "PaperMod"
+    let shortcodes_dir = Path::new("themes/PaperMod/layouts/shortcodes");
+    let shortcodes_dest_dir_path = format!("themes/{}/layouts/shortcodes", THEME_NAME);
+    let shortcodes_dest_dir = Path::new(&shortcodes_dest_dir_path);
+    copy_directory(shortcodes_dir, shortcodes_dest_dir).unwrap();
+
     // Generate the website
     hugo(vec!["--disableKinds", "RSS,sitemap", "--cleanDestinationDir", "--baseURL", "http://localhost:8080"]).map_err(Error::IO)?;
     // Generate Orangutan data files
@@ -132,6 +139,29 @@ fn find(dir: &PathBuf, extensions: &Vec<&str>, files: &mut Vec<PathBuf>) {
             }
         }
     }
+}
+
+fn copy_directory(src: &std::path::Path, dest: &std::path::Path) -> io::Result<()> {
+    if src.is_file() {
+        // If the source is a file, copy it to the destination
+        fs::copy(src, dest)?;
+    } else if src.is_dir() {
+        // If the source is a directory, create a corresponding directory in the destination
+        fs::create_dir_all(dest)?;
+
+        // List the entries in the source directory
+        let entries = fs::read_dir(src)?;
+
+        for entry in entries {
+            let entry = entry?;
+            let entry_dest = dest.join(entry.file_name());
+
+            // Recursively copy each entry in the source directory to the destination directory
+            copy_directory(&entry.path(), &entry_dest)?;
+        }
+    }
+
+    Ok(())
 }
 
 fn read_access_profiles(data_file: &PathBuf) -> Option<Vec<String>> {
