@@ -4,6 +4,7 @@ use base64::{Engine as _, engine::general_purpose};
 use core::fmt;
 use std::collections::HashMap;
 use serde_json::{self, Value};
+use std::env;
 use std::fs::{self, File};
 use std::io::{self, Write, Read};
 use std::path::{Path, PathBuf};
@@ -25,6 +26,8 @@ lazy_static! {
     static ref KEYS_DIR: PathBuf = BASE_DIR.join("keys");
     static ref KEYS: Mutex<HashMap<String, Key<Aes256Gcm>>> = Mutex::new(HashMap::new());
     static ref FILES: Vec<PathBuf> = Vec::new();
+
+    static ref KEYS_MODE: Result<String, env::VarError> = env::var("KEYS_MODE");
 }
 
 fn main() {
@@ -161,7 +164,8 @@ fn encrypt_file(in_file: &PathBuf, key_name: &str) -> Result<(), Error> {
     }
 
     // Encrypt the text
-    let key = get_key(key_name).map_err(Error::IO)?;
+    let keys_reader = <dyn KeysReader>::detect();
+    let key = keys_reader.get_key(key_name)?;
     let cipher = Aes256Gcm::new(&key);
     let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
     let ciphertext = cipher.encrypt(&nonce, plaintext.as_ref()).map_err(Error::AES)?;
@@ -176,47 +180,98 @@ fn encrypt_file(in_file: &PathBuf, key_name: &str) -> Result<(), Error> {
     Ok(())
 }
 
-fn get_key(key_name: &str) -> Result<Key<Aes256Gcm>, io::Error> {
-    let mut keys = KEYS.lock().unwrap();
-    if let Some(key) = keys.get(key_name) {
-        trace!("Read key '{}' from cache", key_name);
-        return Ok(*key);
+trait KeysReader {
+    fn get_key(&self, key_name: &str) -> Result<Key<Aes256Gcm>, Error>;
+}
+
+impl dyn KeysReader {
+    fn detect() -> Box<dyn KeysReader> {
+        KEYS_MODE.clone().map_or(Box::new(LocalKeysReader {}), |v| {
+            match v.as_str() {
+                "LOCAL" => Box::new(LocalKeysReader {}),
+                "ENV" | _ => Box::new(EnvKeysReader {}),
+            }
+        })
     }
+}
 
-    let key_file = KEYS_DIR.join(format!("{}.key", key_name));
+struct EnvKeysReader {}
 
-    if key_file.exists() {
-        // If key file exists, read the file
-        trace!("Reading key '{}' from <{}>…", key_name, key_file.display());
-        let mut file = File::open(key_file)?;
+impl KeysReader for EnvKeysReader {
+    fn get_key(&self, key_name: &str) -> Result<Key<Aes256Gcm>, Error> {
+        let mut keys = KEYS.lock().unwrap();
+        if let Some(key) = keys.get(key_name) {
+            trace!("Read key '{}' from cache", key_name);
+            return Ok(*key);
+        }
 
-        let mut buf: Vec<u8> = Vec::new();
-        file.read_to_end(&mut buf)?;
-        // FIXME: Handle error
-        let key = general_purpose::STANDARD.decode(buf).unwrap();
-        // FIXME: Handle error
-        let key_bytes: [u8; 32] = key.as_slice().try_into().unwrap();
+        let env_var_name = format!("KEY_{}", key_name);
+        trace!("Reading key '{}' from environment ({})…", key_name, env_var_name);
+        env::var(env_var_name)
+            .map_err(Error::Env)
+            .and_then(|key_base64| {
+                // FIXME: Handle error
+                let key = general_purpose::STANDARD.decode(key_base64).unwrap();
 
-        let key: Key<Aes256Gcm> = key_bytes.into();
-        keys.insert(key_name.to_string(), key);
-        Ok(key)
-    } else {
-        // If key file does not exist, create a new key and save it to a new file
-        trace!("Saving new key '{}' into <{}>…", key_name, key_file.display());
-        let key = Aes256Gcm::generate_key(OsRng);
+                let key_bytes: [u8; 32] = key.as_slice().try_into().unwrap();
+                let key: Key<Aes256Gcm> = key_bytes.into();
+                keys.insert(key_name.to_string(), key);
+                Ok(key)
+            })
+    }
+}
 
-        // Encode key as base64
-        let mut buf: Vec<u8> = Vec::new();
-        // Make sure we'll have a slice big enough for base64 + padding
-        buf.resize(key.len() * 4 / 3 + 4, 0);
-        let bytes_written = general_purpose::STANDARD.encode_slice(key, &mut buf).unwrap();
-        // shorten our vec down to just what was written
-        buf.truncate(bytes_written);
+struct LocalKeysReader {}
 
-        let mut file = File::create(&key_file)?;
-        file.write_all(&buf)?;
-        keys.insert(key_name.to_string(), key);
-        Ok(key)
+impl LocalKeysReader {
+    fn key_file(&self, key_name: &str) -> PathBuf {
+        KEYS_DIR.join(format!("{}.key", key_name))
+    }
+}
+
+impl KeysReader for LocalKeysReader {
+    fn get_key(&self, key_name: &str) -> Result<Key<Aes256Gcm>, Error> {
+        let mut keys = KEYS.lock().unwrap();
+        if let Some(key) = keys.get(key_name) {
+            trace!("Read key '{}' from cache", key_name);
+            return Ok(*key);
+        }
+
+        let key_file = self.key_file(key_name);
+
+        if key_file.exists() {
+            // If key file exists, read the file
+            trace!("Reading key '{}' from <{}>…", key_name, key_file.display());
+            let mut file = File::open(key_file).map_err(Error::IO)?;
+
+            let mut buf: Vec<u8> = Vec::new();
+            file.read_to_end(&mut buf).map_err(Error::IO)?;
+            // FIXME: Handle error
+            let key = general_purpose::STANDARD.decode(buf).unwrap();
+            // FIXME: Handle error
+            let key_bytes: [u8; 32] = key.as_slice().try_into().unwrap();
+
+            let key: Key<Aes256Gcm> = key_bytes.into();
+            keys.insert(key_name.to_string(), key);
+            Ok(key)
+        } else {
+            // If key file does not exist, create a new key and save it to a new file
+            trace!("Saving new key '{}' into <{}>…", key_name, key_file.display());
+            let key = Aes256Gcm::generate_key(OsRng);
+
+            // Encode key as base64
+            let mut buf: Vec<u8> = Vec::new();
+            // Make sure we'll have a slice big enough for base64 + padding
+            buf.resize(key.len() * 4 / 3 + 4, 0);
+            let bytes_written = general_purpose::STANDARD.encode_slice(key, &mut buf).unwrap();
+            // shorten our vec down to just what was written
+            buf.truncate(bytes_written);
+
+            let mut file = File::create(&key_file).map_err(Error::IO)?;
+            file.write_all(&buf).map_err(Error::IO)?;
+            keys.insert(key_name.to_string(), key);
+            Ok(key)
+        }
     }
 }
 
@@ -232,6 +287,7 @@ fn create_directory(directory: &Path) {
 #[derive(Debug)]
 enum Error {
     IO(io::Error),
+    Env(env::VarError),
     AES(aes_gcm::Error),
 }
 
@@ -239,6 +295,7 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::IO(err) => err.fmt(f),
+            Error::Env(err) => err.fmt(f),
             Error::AES(err) => err.fmt(f),
         }
     }

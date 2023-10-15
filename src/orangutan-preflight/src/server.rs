@@ -39,7 +39,6 @@ const TOKEN_QUERY_PARAM_NAME: &'static str = "token";
 const REFRESH_TOKEN_QUERY_PARAM_NAME: &'static str = "refresh_token";
 
 lazy_static! {
-    // TODO: Make this a command-line argument
     static ref MODE: Result<String, env::VarError> = env::var("MODE");
     static ref KEYS_MODE: Result<String, env::VarError> = env::var("KEYS_MODE");
 
@@ -289,8 +288,7 @@ impl dyn ObjectReader {
         MODE.clone().map_or(Box::new(LocalObjectReader {}), |v| {
             match v.as_str() {
                 "S3" => Box::new(S3ObjectReader {}),
-                "LOCAL" => Box::new(LocalObjectReader {}),
-                _ => Box::new(LocalObjectReader {}),
+                "LOCAL" | _ => Box::new(LocalObjectReader {}),
             }
         })
     }
@@ -399,7 +397,7 @@ trait KeysReader {
 
 impl dyn KeysReader {
     fn detect() -> Box<dyn KeysReader> {
-        MODE.clone().map_or(Box::new(LocalKeysReader {}), |v| {
+        KEYS_MODE.clone().map_or(Box::new(LocalKeysReader {}), |v| {
             match v.as_str() {
                 "LOCAL" => Box::new(LocalKeysReader {}),
                 "ENV" | _ => Box::new(EnvKeysReader {}),
@@ -449,6 +447,12 @@ impl KeysReader for EnvKeysReader {
 
 struct LocalKeysReader {}
 
+impl LocalKeysReader {
+    fn key_file(&self, key_name: &str) -> PathBuf {
+        KEYS_DIR.join(format!("{}.key", key_name))
+    }
+}
+
 impl KeysReader for LocalKeysReader {
     fn get_key(&self, key_name: &str) -> Result<Key<Aes256Gcm>, Error> {
         let mut keys = KEYS.lock().unwrap();
@@ -457,7 +461,7 @@ impl KeysReader for LocalKeysReader {
             return Ok(*key);
         }
 
-        let key_file = key_file(key_name);
+        let key_file = self.key_file(key_name);
 
         if key_file.exists() {
             // If key file exists, read the file
@@ -497,7 +501,7 @@ impl KeysReader for LocalKeysReader {
     fn get_root_biscuit_key(&self) -> Result<biscuit::KeyPair, Error> {
         let key_name = ROOT_KEY_NAME;
 
-        let key_file = key_file(key_name);
+        let key_file = self.key_file(key_name);
 
         if key_file.exists() {
             // If key file exists, read the file
@@ -868,10 +872,6 @@ fn find(dir: &PathBuf, files: &mut Vec<PathBuf>) {
             }
         }
     }
-}
-
-fn key_file(key_name: &str) -> PathBuf {
-    KEYS_DIR.join(format!("{}.key", key_name))
 }
 
 fn decrypt(encrypted_data: Vec<u8>, key_name: &str) -> Result<Vec<u8>, Error> {
