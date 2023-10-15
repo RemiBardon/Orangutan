@@ -20,8 +20,11 @@ lazy_static! {
     static ref BASE_DIR: &'static Path = Path::new(".orangutan");
     static ref KEYS_DIR: PathBuf = BASE_DIR.join("keys");
 
+    static ref KEYS_MODE: Result<String, env::VarError> = env::var("KEYS_MODE");
+
     static ref ROOT_KEY: biscuit::KeyPair = {
-        match get_root_key() {
+        let keys_reader = <dyn KeysReader>::detect();
+        match keys_reader.get_root_biscuit_key() {
             Ok(public_key) => public_key,
             Err(err) => {
                 error!("Error generating root Biscuit key: {}", err);
@@ -62,35 +65,74 @@ fn main() {
     }
 }
 
-fn get_root_key() -> Result<biscuit::KeyPair, Error> {
-    let key_name = ROOT_KEY_NAME;
-    let key_file = key_file(key_name);
+trait KeysReader {
+    fn get_root_biscuit_key(&self) -> Result<biscuit::KeyPair, Error>;
+}
 
-    if key_file.exists() {
-        // If key file exists, read the file
-        trace!("Reading key '{}' from <{}>…", key_name, key_file.display());
-        let mut file = File::open(key_file).map_err(Error::IO)?;
-        let mut key_bytes = String::new();
-        file.read_to_string(&mut key_bytes).map_err(Error::IO)?;
-        let key = biscuit::PrivateKey::from_bytes_hex(&key_bytes).map_err(Error::BiscuitFormat)?;
-        Ok(biscuit::KeyPair::from(&key))
-    } else {
-        // If key file does not exist, create a new key and save it to a new file
-        trace!("Saving new key '{}' into <{}>…", key_name, key_file.display());
-        let key_pair = biscuit::KeyPair::new();
-        let mut file = File::create(&key_file).map_err(Error::IO)?;
-        file.write_all(key_pair.private().to_bytes_hex().as_bytes()).map_err(Error::IO)?;
-        Ok(key_pair)
+impl dyn KeysReader {
+    fn detect() -> Box<dyn KeysReader> {
+        match KEYS_MODE.clone().unwrap_or("".to_string()).as_str() {
+            "LOCAL" => Box::new(LocalKeysReader {}),
+            "ENV" | _ => Box::new(EnvKeysReader {}),
+        }
     }
 }
 
-fn key_file(key_name: &str) -> PathBuf {
-    KEYS_DIR.join(format!("{}.key", key_name))
+struct EnvKeysReader {}
+
+impl KeysReader for EnvKeysReader {
+    fn get_root_biscuit_key(&self) -> Result<biscuit::KeyPair, Error> {
+        let key_name = ROOT_KEY_NAME;
+
+        let env_var_name = format!("KEY_{}", key_name);
+        trace!("Reading key '{}' from environment ({})…", key_name, env_var_name);
+        env::var(env_var_name)
+            .map_err(Error::Env)
+            .and_then(|key_bytes| {
+                let key = biscuit::PrivateKey::from_bytes_hex(&key_bytes).map_err(Error::BiscuitFormat)?;
+                Ok(biscuit::KeyPair::from(&key))
+            })
+    }
 }
+
+struct LocalKeysReader {}
+
+impl LocalKeysReader {
+    fn key_file(&self, key_name: &str) -> PathBuf {
+        KEYS_DIR.join(format!("{}.key", key_name))
+    }
+}
+
+impl KeysReader for LocalKeysReader {
+    fn get_root_biscuit_key(&self) -> Result<biscuit::KeyPair, Error> {
+        let key_name = ROOT_KEY_NAME;
+
+        let key_file = self.key_file(key_name);
+
+        if key_file.exists() {
+            // If key file exists, read the file
+            trace!("Reading key '{}' from <{}>…", key_name, key_file.display());
+            let mut file = File::open(key_file).map_err(Error::IO)?;
+            let mut key_bytes = String::new();
+            file.read_to_string(&mut key_bytes).map_err(Error::IO)?;
+            let key = biscuit::PrivateKey::from_bytes_hex(&key_bytes).map_err(Error::BiscuitFormat)?;
+            Ok(biscuit::KeyPair::from(&key))
+        } else {
+            // If key file does not exist, create a new key and save it to a new file
+            trace!("Saving new key '{}' into <{}>…", key_name, key_file.display());
+            let key_pair = biscuit::KeyPair::new();
+            let mut file = File::create(&key_file).map_err(Error::IO)?;
+            file.write_all(key_pair.private().to_bytes_hex().as_bytes()).map_err(Error::IO)?;
+            Ok(key_pair)
+        }
+    }
+}
+
 
 #[derive(Debug)]
 enum Error {
     IO(io::Error),
+    Env(env::VarError),
     BiscuitFormat(biscuit::error::Format),
 }
 
@@ -98,6 +140,7 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::IO(err) => err.fmt(f),
+            Error::Env(err) => err.fmt(f),
             Error::BiscuitFormat(err) => err.fmt(f),
         }
     }
