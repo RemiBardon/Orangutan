@@ -41,7 +41,7 @@ const REFRESH_TOKEN_QUERY_PARAM_NAME: &'static str = "refresh_token";
 lazy_static! {
     // TODO: Make this a command-line argument
     static ref MODE: Result<String, env::VarError> = env::var("MODE");
-    static ref LOCAL: bool = env::var("RUN_LOCALLY").map_or(true, |v| v == "true");
+    static ref KEYS_MODE: Result<String, env::VarError> = env::var("KEYS_MODE");
 
     static ref BASE_DIR: &'static Path = Path::new(".orangutan");
     static ref WEBSITE_DIR: PathBuf = BASE_DIR.join("website");
@@ -65,7 +65,8 @@ lazy_static! {
     };
 
     static ref ROOT_KEY: biscuit::KeyPair = {
-        match get_root_key() {
+        let keys_reader = <dyn KeysReader>::detect();
+        match keys_reader.get_root_biscuit_key() {
             Ok(public_key) => public_key,
             Err(err) => {
                 error!("Error generating root Biscuit key: {}", err);
@@ -388,6 +389,132 @@ impl ObjectReader for LocalObjectReader {
         trace!("Reading '{}' from disk at <{}>…", object_key, file_path.display());
 
         Self::serve_file(file_path)
+    }
+}
+
+trait KeysReader {
+    fn get_key(&self, key_name: &str) -> Result<Key<Aes256Gcm>, Error>;
+    fn get_root_biscuit_key(&self) -> Result<biscuit::KeyPair, Error>;
+}
+
+impl dyn KeysReader {
+    fn detect() -> Box<dyn KeysReader> {
+        MODE.clone().map_or(Box::new(LocalKeysReader {}), |v| {
+            match v.as_str() {
+                "LOCAL" => Box::new(LocalKeysReader {}),
+                "ENV" | _ => Box::new(EnvKeysReader {}),
+            }
+        })
+    }
+}
+
+struct EnvKeysReader {}
+
+impl KeysReader for EnvKeysReader {
+    fn get_key(&self, key_name: &str) -> Result<Key<Aes256Gcm>, Error> {
+        let mut keys = KEYS.lock().unwrap();
+        if let Some(key) = keys.get(key_name) {
+            trace!("Read key '{}' from cache", key_name);
+            return Ok(*key);
+        }
+
+        let env_var_name = format!("KEY_{}", key_name);
+        trace!("Reading key '{}' from environment ({})…", key_name, env_var_name);
+        env::var(env_var_name)
+            .map_err(Error::Env)
+            .and_then(|key_base64| {
+                // FIXME: Handle error
+                let key = general_purpose::STANDARD.decode(key_base64).unwrap();
+
+                let key_bytes: [u8; 32] = key.as_slice().try_into().unwrap();
+                let key: Key<Aes256Gcm> = key_bytes.into();
+                keys.insert(key_name.to_string(), key);
+                Ok(key)
+            })
+    }
+
+    fn get_root_biscuit_key(&self) -> Result<biscuit::KeyPair, Error> {
+        let key_name = ROOT_KEY_NAME;
+
+        let env_var_name = format!("KEY_{}", key_name);
+        trace!("Reading key '{}' from environment ({})…", key_name, env_var_name);
+        env::var(env_var_name)
+            .map_err(Error::Env)
+            .and_then(|key_bytes| {
+                let key = biscuit::PrivateKey::from_bytes_hex(&key_bytes).map_err(Error::BiscuitFormat)?;
+                Ok(biscuit::KeyPair::from(&key))
+            })
+    }
+}
+
+struct LocalKeysReader {}
+
+impl KeysReader for LocalKeysReader {
+    fn get_key(&self, key_name: &str) -> Result<Key<Aes256Gcm>, Error> {
+        let mut keys = KEYS.lock().unwrap();
+        if let Some(key) = keys.get(key_name) {
+            trace!("Read key '{}' from cache", key_name);
+            return Ok(*key);
+        }
+
+        let key_file = key_file(key_name);
+
+        if key_file.exists() {
+            // If key file exists, read the file
+            trace!("Reading key '{}' from <{}>…", key_name, key_file.display());
+            let mut file = File::open(key_file).map_err(Error::IO)?;
+
+            let mut buf: Vec<u8> = Vec::new();
+            file.read_to_end(&mut buf).map_err(Error::IO)?;
+            // FIXME: Handle error
+            let key = general_purpose::STANDARD.decode(buf).unwrap();
+            // FIXME: Handle error
+            let key_bytes: [u8; 32] = key.as_slice().try_into().unwrap();
+
+            let key: Key<Aes256Gcm> = key_bytes.into();
+            keys.insert(key_name.to_string(), key);
+            Ok(key)
+        } else {
+            // If key file does not exist, create a new key and save it to a new file
+            trace!("Saving new key '{}' into <{}>…", key_name, key_file.display());
+            let key = Aes256Gcm::generate_key(OsRng);
+
+            // Encode key as base64
+            let mut buf: Vec<u8> = Vec::new();
+            // Make sure we'll have a slice big enough for base64 + padding
+            buf.resize(key.len() * 4 / 3 + 4, 0);
+            let bytes_written = general_purpose::STANDARD.encode_slice(key, &mut buf).unwrap();
+            // shorten our vec down to just what was written
+            buf.truncate(bytes_written);
+
+            let mut file = File::create(&key_file).map_err(Error::IO)?;
+            file.write_all(&buf).map_err(Error::IO)?;
+            keys.insert(key_name.to_string(), key);
+            Ok(key)
+        }
+    }
+
+    fn get_root_biscuit_key(&self) -> Result<biscuit::KeyPair, Error> {
+        let key_name = ROOT_KEY_NAME;
+
+        let key_file = key_file(key_name);
+
+        if key_file.exists() {
+            // If key file exists, read the file
+            trace!("Reading key '{}' from <{}>…", key_name, key_file.display());
+            let mut file = File::open(key_file).map_err(Error::IO)?;
+            let mut key_bytes = String::new();
+            file.read_to_string(&mut key_bytes).map_err(Error::IO)?;
+            let key = biscuit::PrivateKey::from_bytes_hex(&key_bytes).map_err(Error::BiscuitFormat)?;
+            Ok(biscuit::KeyPair::from(&key))
+        } else {
+            // If key file does not exist, create a new key and save it to a new file
+            trace!("Saving new key '{}' into <{}>…", key_name, key_file.display());
+            let key_pair = biscuit::KeyPair::new();
+            let mut file = File::create(&key_file).map_err(Error::IO)?;
+            file.write_all(key_pair.private().to_bytes_hex().as_bytes()).map_err(Error::IO)?;
+            Ok(key_pair)
+        }
     }
 }
 
@@ -743,106 +870,12 @@ fn find(dir: &PathBuf, files: &mut Vec<PathBuf>) {
     }
 }
 
-fn get_key(key_name: &str) -> Result<Key<Aes256Gcm>, Error> {
-    let mut keys = KEYS.lock().unwrap();
-    if let Some(key) = keys.get(key_name) {
-        trace!("Read key '{}' from cache", key_name);
-        return Ok(*key);
-    }
-
-    if *LOCAL {
-        let key_file = key_file(key_name);
-
-        if key_file.exists() {
-            // If key file exists, read the file
-            trace!("Reading key '{}' from <{}>…", key_name, key_file.display());
-            let mut file = File::open(key_file).map_err(Error::IO)?;
-
-            let mut buf: Vec<u8> = Vec::new();
-            file.read_to_end(&mut buf).map_err(Error::IO)?;
-            // FIXME: Handle error
-            let key = general_purpose::STANDARD.decode(buf).unwrap();
-            // FIXME: Handle error
-            let key_bytes: [u8; 32] = key.as_slice().try_into().unwrap();
-    
-            let key: Key<Aes256Gcm> = key_bytes.into();
-            keys.insert(key_name.to_string(), key);
-            Ok(key)
-        } else {
-            // If key file does not exist, create a new key and save it to a new file
-            trace!("Saving new key '{}' into <{}>…", key_name, key_file.display());
-            let key = Aes256Gcm::generate_key(OsRng);
-    
-            // Encode key as base64
-            let mut buf: Vec<u8> = Vec::new();
-            // Make sure we'll have a slice big enough for base64 + padding
-            buf.resize(key.len() * 4 / 3 + 4, 0);
-            let bytes_written = general_purpose::STANDARD.encode_slice(key, &mut buf).unwrap();
-            // shorten our vec down to just what was written
-            buf.truncate(bytes_written);
-    
-            let mut file = File::create(&key_file).map_err(Error::IO)?;
-            file.write_all(&buf).map_err(Error::IO)?;
-            keys.insert(key_name.to_string(), key);
-            Ok(key)
-        }
-    } else {
-        let env_var_name = format!("KEY_{}", key_name);
-        trace!("Reading key '{}' from environment ({})…", key_name, env_var_name);
-        env::var(env_var_name)
-            .map_err(Error::Env)
-            .and_then(|key_base64| {
-                // FIXME: Handle error
-                let key = general_purpose::STANDARD.decode(key_base64).unwrap();
-
-                let key_bytes: [u8; 32] = key.as_slice().try_into().unwrap();
-                let key: Key<Aes256Gcm> = key_bytes.into();
-                keys.insert(key_name.to_string(), key);
-                Ok(key)
-            })
-    }
-}
-
-fn get_root_key() -> Result<biscuit::KeyPair, Error> {
-    let key_name = ROOT_KEY_NAME;
-
-    if *LOCAL {
-        let key_file = key_file(key_name);
-
-        if key_file.exists() {
-            // If key file exists, read the file
-            trace!("Reading key '{}' from <{}>…", key_name, key_file.display());
-            let mut file = File::open(key_file).map_err(Error::IO)?;
-            let mut key_bytes = String::new();
-            file.read_to_string(&mut key_bytes).map_err(Error::IO)?;
-            let key = biscuit::PrivateKey::from_bytes_hex(&key_bytes).map_err(Error::BiscuitFormat)?;
-            Ok(biscuit::KeyPair::from(&key))
-        } else {
-            // If key file does not exist, create a new key and save it to a new file
-            trace!("Saving new key '{}' into <{}>…", key_name, key_file.display());
-            let key_pair = biscuit::KeyPair::new();
-            let mut file = File::create(&key_file).map_err(Error::IO)?;
-            file.write_all(key_pair.private().to_bytes_hex().as_bytes()).map_err(Error::IO)?;
-            Ok(key_pair)
-        }
-    } else {
-        let env_var_name = format!("KEY_{}", key_name);
-        trace!("Reading key '{}' from environment ({})…", key_name, env_var_name);
-        env::var(env_var_name)
-            .map_err(Error::Env)
-            .and_then(|key_bytes| {
-                let key = biscuit::PrivateKey::from_bytes_hex(&key_bytes).map_err(Error::BiscuitFormat)?;
-                Ok(biscuit::KeyPair::from(&key))
-            })
-    }
-}
-
 fn key_file(key_name: &str) -> PathBuf {
     KEYS_DIR.join(format!("{}.key", key_name))
 }
 
 fn decrypt(encrypted_data: Vec<u8>, key_name: &str) -> Result<Vec<u8>, Error> {
-    let key = get_key(key_name)?;
+    let key = <dyn KeysReader>::detect().get_key(key_name)?;
     let cipher = Aes256Gcm::new(&key);
 
     // Separate the nonce and ciphertext
