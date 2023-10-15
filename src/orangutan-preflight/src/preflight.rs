@@ -56,7 +56,11 @@ fn throwing_main() -> Result<(), Error> {
     copy_directory(shortcodes_dir, shortcodes_dest_dir).unwrap();
 
     // Generate the website
-    hugo(vec!["--disableKinds", "RSS,sitemap", "--cleanDestinationDir", "--baseURL", "http://localhost:8080"]).map_err(Error::CannotGenerateWebsite)?;
+    let mut params = vec!["--disableKinds", "RSS,sitemap", "--cleanDestinationDir"];
+    if env::var("LOCALHOST") == Ok("true".to_string()) {
+        params.append(&mut vec!["--baseURL", "http://localhost:8080"]);
+    }
+    hugo(params).map_err(Error::CannotGenerateWebsite)?;
     // Generate Orangutan data files
     hugo(vec!["--disableKinds", "RSS,sitemap,home", "--theme", THEME_NAME]).map_err(Error::CannotGenerateDataFiles)?;
 
