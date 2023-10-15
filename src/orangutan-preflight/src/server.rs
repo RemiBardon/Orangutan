@@ -285,12 +285,10 @@ trait ObjectReader {
 
 impl dyn ObjectReader {
     fn detect() -> Box<dyn ObjectReader> {
-        MODE.clone().map_or(Box::new(LocalObjectReader {}), |v| {
-            match v.as_str() {
-                "S3" => Box::new(S3ObjectReader {}),
-                "LOCAL" | _ => Box::new(LocalObjectReader {}),
-            }
-        })
+        match MODE.clone().unwrap_or("".to_string()).as_str() {
+            "S3" => Box::new(S3ObjectReader {}),
+            "ENV" | _ => Box::new(LocalObjectReader {}),
+        }
     }
 }
 
@@ -397,12 +395,10 @@ trait KeysReader {
 
 impl dyn KeysReader {
     fn detect() -> Box<dyn KeysReader> {
-        KEYS_MODE.clone().map_or(Box::new(LocalKeysReader {}), |v| {
-            match v.as_str() {
-                "LOCAL" => Box::new(LocalKeysReader {}),
-                "ENV" | _ => Box::new(EnvKeysReader {}),
-            }
-        })
+        match KEYS_MODE.clone().unwrap_or("".to_string()).as_str() {
+            "LOCAL" => Box::new(LocalKeysReader {}),
+            "ENV" | _ => Box::new(EnvKeysReader {}),
+        }
     }
 }
 

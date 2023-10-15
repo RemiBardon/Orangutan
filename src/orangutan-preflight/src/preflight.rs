@@ -186,12 +186,10 @@ trait KeysReader {
 
 impl dyn KeysReader {
     fn detect() -> Box<dyn KeysReader> {
-        KEYS_MODE.clone().map_or(Box::new(LocalKeysReader {}), |v| {
-            match v.as_str() {
-                "LOCAL" => Box::new(LocalKeysReader {}),
-                "ENV" | _ => Box::new(EnvKeysReader {}),
-            }
-        })
+        match KEYS_MODE.clone().unwrap_or("".to_string()).as_str() {
+            "LOCAL" => Box::new(LocalKeysReader {}),
+            "ENV" | _ => Box::new(EnvKeysReader {}),
+        }
     }
 }
 
