@@ -691,6 +691,10 @@ impl<'a, 'r> FromRequest<'a, 'r> for RefreshedToken {
         let token = Token::from_request(request).succeeded();
 
         refresh_token = decode(&refresh_token).unwrap().to_string();
+        // Because tokens can be passed as URL query params,
+        // they might have the "=" padding characters remove.
+        // We need to add them back.
+        let refresh_token = add_padding(&refresh_token);
         match Biscuit::from_base64(refresh_token, ROOT_KEY.public()) {
             Ok(refresh_biscuit) => {
                 trace!("Checking if refresh token is valid or not");
