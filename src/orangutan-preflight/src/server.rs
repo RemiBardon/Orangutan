@@ -535,6 +535,10 @@ impl<'a, 'r> FromRequest<'a, 'r> for Token {
             biscuit: &mut Option<Biscuit>,
             should_save: &mut bool
         ) {
+            // Because tokens can be passed as URL query params,
+            // they might have the "=" padding characters remove.
+            // We need to add them back.
+            let token = add_padding(token);
             match (
                 biscuit.clone(),
                 Biscuit::from_base64(token, ROOT_KEY.public()),
@@ -912,6 +916,21 @@ impl fmt::Display for Error {
             Error::RusotoListObject(err) => err.fmt(f),
         }
     }
+}
+
+fn add_padding(base64_string: &str) -> String {
+    // If base64 string is already padded, don't do anything
+    if base64_string.ends_with("=") {
+        return base64_string.to_string()
+    }
+
+    // Calculate the number of padding characters needed
+    let padding_count = 4 - (base64_string.len() % 4);
+    
+    // Create a new string with the required padding characters
+    let padded_string = format!("{}{}", base64_string, "=".repeat(padding_count));
+
+    padded_string
 }
 
 #[cfg(test)]

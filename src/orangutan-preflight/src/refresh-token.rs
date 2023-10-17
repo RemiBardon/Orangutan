@@ -12,7 +12,6 @@ use biscuit::macros::{fact, block};
 #[macro_use]
 extern crate lazy_static;
 use log::{error, trace};
-use urlencoding::encode;
 
 const ROOT_KEY_NAME: &'static str = "_biscuit_root";
 
@@ -57,7 +56,10 @@ fn main() {
             biscuit = biscuit.append(expiry_block)
                 .expect(&format!("Could not add block '' to Biscuit"));
             match biscuit.to_base64() {
-                Ok(biscuit_base64) => println!("{}", encode(&biscuit_base64)),
+                Ok(biscuit_base64) => {
+                    let biscuit_base64 = remove_padding(&biscuit_base64);
+                    println!("{}", biscuit_base64)
+                },
                 Err(err) => error!("{}", err),
             }
         },
@@ -144,4 +146,15 @@ impl fmt::Display for Error {
             Error::BiscuitFormat(err) => err.fmt(f),
         }
     }
+}
+
+fn remove_padding<'a>(base64_string: &'a str) -> &'a str {
+    // Find the position of the first '=' character
+    if let Some(index) = base64_string.find('=') {
+        // Remove all characters from the first '=' character to the end
+        let result = &base64_string[0..index];
+        return result;
+    }
+    // If no '=' character is found, return the original string
+    base64_string
 }
