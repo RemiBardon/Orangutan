@@ -100,6 +100,7 @@ fn throwing_main() -> Result<(), std::io::Error> {
     rocket::ignite()
         .mount("/", routes![
             get_index,
+            clear_cookies,
             handle_refresh_token,
             handle_request_authenticated,
             handle_request,
@@ -129,6 +130,15 @@ fn get_user_info(token: Option<Token>) -> String {
     }
 }
 
+#[get("/clear-cookies")]
+fn clear_cookies(mut cookies: Cookies) -> &str {
+    for cookie in cookies.iter().map(Clone::clone).collect::<Vec<_>>() {
+        cookies.remove(cookie.clone());
+    }
+
+    "Success"
+}
+
 #[get("/<_path..>")]
 fn handle_refresh_token<'a>(
     _path: PathBuf,
@@ -140,8 +150,8 @@ fn handle_refresh_token<'a>(
     add_cookie_if_necessary(&refreshed_token.0, cookies);
 
     // Redirect to the same page without the refresh token query param
-    // FIXME: Do not clear the whole query
     let mut origin = origin.clone();
+    // FIXME: Do not clear the whole query
     origin.clear_query();
     Response::build()
         .status(Status::Found) // 302 Found (Temporary Redirect)
@@ -753,6 +763,16 @@ impl<'a, 'r> FromRequest<'a, 'r> for RefreshedToken {
         }
     }
 }
+
+// fn remove_query_item(key: &str, request: &Request<'_>) -> String {
+//     request.raw_query_items()
+//         // We can unwrap here as we're sure there is at least one value.
+//         .unwrap()
+//         .filter(|p| p.key != key)
+//         .map(|item| item.raw.as_str())
+//         .collect::<Vec<_>>()
+//         .join("&")
+// }
 
 fn should_force_token_refresh(query_param_value: Option<Result<bool, &RawStr>>) -> bool {
     query_param_value.is_some_and(|v| v.unwrap_or(true))
