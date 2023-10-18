@@ -8,7 +8,7 @@ use base64::{Engine as _, engine::general_purpose};
 extern crate time;
 use rocket::http::hyper::header::{Location, CacheControl, Pragma, CacheDirective};
 use time::Duration;
-use rocket::http::{Status, Cookie, Cookies, SameSite};
+use rocket::http::{Status, Cookie, Cookies, SameSite, RawStr};
 use rocket::http::uri::Origin;
 use rocket::{Request, request, Outcome, Response};
 use rocket::request::FromRequest;
@@ -37,6 +37,7 @@ const ROOT_KEY_NAME: &'static str = "_biscuit_root";
 const TOKEN_COOKIE_NAME: &'static str = "token";
 const TOKEN_QUERY_PARAM_NAME: &'static str = "token";
 const REFRESH_TOKEN_QUERY_PARAM_NAME: &'static str = "refresh_token";
+const FORCE_QUERY_PARAM_NAME: &'static str = "force";
 
 lazy_static! {
     static ref MODE: Result<String, env::VarError> = env::var("MODE");
@@ -132,11 +133,11 @@ fn get_user_info(token: Option<Token>) -> String {
 fn handle_refresh_token<'a>(
     _path: PathBuf,
     origin: &Origin,
-    mut cookies: Cookies,
+    cookies: Cookies,
     refreshed_token: RefreshedToken,
 ) -> Response<'a> {
     // Save token to a Cookie if necessary
-    add_cookie_if_necessary(&refreshed_token.0, &mut cookies);
+    add_cookie_if_necessary(&refreshed_token.0, cookies);
 
     // Redirect to the same page without the refresh token query param
     // FIXME: Do not clear the whole query
@@ -156,9 +157,9 @@ fn handle_request_authenticated<'a>(
     _path: PathBuf,
     origin: &Origin,
     token: Token,
-    mut cookies: Cookies
+    cookies: Cookies
 ) -> Response<'a> {
-    add_cookie_if_necessary(&token, &mut cookies);
+    add_cookie_if_necessary(&token, cookies);
     _handle_request(origin, Some(&token.biscuit))
         .unwrap_or_else(|e| e)
 }
@@ -688,7 +689,13 @@ impl<'a, 'r> FromRequest<'a, 'r> for RefreshedToken {
 
         debug!("Found refresh token query param");
 
-        let token = Token::from_request(request).succeeded();
+        // If query contains `force=true`, `force` or `force=<anything>`, don't search for an existing token.
+        // If instead it contains `force=false` or `force` is not present, search for a token to augment.
+        let token = if should_force_token_refresh(request.get_query_value::<bool>(FORCE_QUERY_PARAM_NAME)) {
+            None
+        } else {
+            Token::from_request(request).succeeded()
+        };
 
         refresh_token = decode(&refresh_token).unwrap().to_string();
         // Because tokens can be passed as URL query params,
@@ -747,7 +754,11 @@ impl<'a, 'r> FromRequest<'a, 'r> for RefreshedToken {
     }
 }
 
-fn add_cookie_if_necessary(token: &Token, cookies: &mut Cookies) {
+fn should_force_token_refresh(query_param_value: Option<Result<bool, &RawStr>>) -> bool {
+    query_param_value.is_some_and(|v| v.unwrap_or(true))
+}
+
+fn add_cookie_if_necessary(token: &Token, mut cookies: Cookies) {
     if token.should_save {
         match token.biscuit.to_base64() {
             Ok(base64) => {
@@ -1044,5 +1055,15 @@ mod tests {
         assert_eq!(add_padding("ab=="), "ab==".to_string());
         assert_eq!(add_padding("abc="), "abc=".to_string());
         assert_eq!(add_padding("abcd"), "abcd".to_string());
+    }
+
+    #[test]
+    fn test_should_force_token_refresh() {
+        assert_eq!(should_force_token_refresh(None), false);
+        assert_eq!(should_force_token_refresh(Some(Ok(true))), true);
+        assert_eq!(should_force_token_refresh(Some(Ok(false))), false);
+        assert_eq!(should_force_token_refresh(Some(Err(RawStr::from_str("yes")))), true);
+        assert_eq!(should_force_token_refresh(Some(Err(RawStr::from_str("no")))), true);
+        assert_eq!(should_force_token_refresh(Some(Err(RawStr::from_str("")))), true);
     }
 }
