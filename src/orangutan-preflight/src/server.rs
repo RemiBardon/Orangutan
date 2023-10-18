@@ -923,18 +923,18 @@ impl fmt::Display for Error {
 }
 
 fn add_padding(base64_string: &str) -> String {
-    // If base64 string is already padded, don't do anything
+    // If the base64 string is already padded, don't do anything.
     if base64_string.ends_with("=") {
         return base64_string.to_string()
     }
 
-    // Calculate the number of padding characters needed
-    let padding_count = 4 - (base64_string.len() % 4);
-    
-    // Create a new string with the required padding characters
-    let padded_string = format!("{}{}", base64_string, "=".repeat(padding_count));
-
-    padded_string
+    match base64_string.len() % 4 {
+        // If the base64 string has a multiple of 4 characters, don't do anything.
+        0 => base64_string.to_string(),
+        // If the base64 string doesn't have a multiple of 4 characters,
+        // create a new string with the required padding characters.
+        n => format!("{}{}", base64_string, "=".repeat(4 - n)),
+    }
 }
 
 #[cfg(test)]
@@ -1031,5 +1031,18 @@ mod tests {
                 "/anything.custom@family",
             ]
         );
+    }
+
+    #[test]
+    fn test_base64_padding() {
+        assert_eq!(add_padding("a"), "a===".to_string());
+        assert_eq!(add_padding("ab"), "ab==".to_string());
+        assert_eq!(add_padding("abc"), "abc=".to_string());
+        assert_eq!(add_padding("abcd"), "abcd".to_string());
+
+        assert_eq!(add_padding("a==="), "a===".to_string());
+        assert_eq!(add_padding("ab=="), "ab==".to_string());
+        assert_eq!(add_padding("abc="), "abc=".to_string());
+        assert_eq!(add_padding("abcd"), "abcd".to_string());
     }
 }
