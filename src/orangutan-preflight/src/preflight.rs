@@ -1,3 +1,5 @@
+#![feature(exit_status_error)]
+
 use aes_gcm::aead::{Aead, AeadCore, KeyInit, OsRng};
 use aes_gcm::{Aes256Gcm, Key};
 use base64::{Engine as _, engine::general_purpose};
@@ -8,7 +10,7 @@ use std::env;
 use std::fs::{self, File};
 use std::io::{self, Write, Read};
 use std::path::{Path, PathBuf};
-use std::process::{Command, exit};
+use std::process::{Command, exit, ExitStatusError};
 use std::sync::Mutex;
 use tracing_subscriber::FmtSubscriber;
 use tracing::{Level, debug, error, trace, warn};
@@ -60,9 +62,11 @@ fn throwing_main() -> Result<(), Error> {
     if env::var("LOCALHOST") == Ok("true".to_string()) {
         params.append(&mut vec!["--baseURL", "http://localhost:8080"]);
     }
-    hugo(params).map_err(Error::CannotGenerateWebsite)?;
+    hugo(params)
+        .map_err(|e| Error::CannotGenerateWebsite(Box::new(e)))?;
     // Generate Orangutan data files
-    hugo(vec!["--disableKinds", "RSS,sitemap,home", "--theme", THEME_NAME]).map_err(Error::CannotGenerateDataFiles)?;
+    hugo(vec!["--disableKinds", "RSS,sitemap,home", "--theme", THEME_NAME])
+        .map_err(|e| Error::CannotGenerateDataFiles(Box::new(e)))?;
 
     // Temporary fix to avoid leakage of page existence and content
     // TODO(RemiBardon): Find a solution to avoid removing this file
@@ -101,12 +105,16 @@ fn throwing_main() -> Result<(), Error> {
     Ok(())
 }
 
-fn hugo(params: Vec<&str>) -> Result<std::process::ExitStatus, io::Error> {
+fn hugo(params: Vec<&str>) -> Result<(), Error> {
     let destination = DEST_DIR.to_str().unwrap().to_owned();
     let base_params: Vec<&str> = vec!["--destination", destination.as_str()];
-    Command::new("hugo")
+    let status = Command::new("hugo")
         .args(base_params.iter().chain(params.iter()))
         .status()
+        .map_err(Error::CannotExecuteCommand)?;
+
+    status.exit_ok()
+        .map_err(Error::CommandExecutionFailed)
 }
 
 fn empty_index_json() -> Result<(), io::Error> {
@@ -320,8 +328,10 @@ fn create_directory(directory: &Path) {
 enum Error {
     Env(env::VarError),
     AES(aes_gcm::Error),
-    CannotGenerateWebsite(io::Error),
-    CannotGenerateDataFiles(io::Error),
+    CannotExecuteCommand(io::Error),
+    CommandExecutionFailed(ExitStatusError),
+    CannotGenerateWebsite(Box<Error>),
+    CannotGenerateDataFiles(Box<Error>),
     CannotEmptyIndexJson(io::Error),
     CannotCreateFile(PathBuf, io::Error),
     CannotOpenFile(PathBuf, io::Error),
@@ -335,6 +345,8 @@ impl fmt::Display for Error {
         match self {
             Error::Env(err) => err.fmt(f),
             Error::AES(err) => err.fmt(f),
+            Error::CannotExecuteCommand(err) => write!(f, "Could not execute command: {err}"),
+            Error::CommandExecutionFailed(err) => write!(f, "Command failed: {err}"),
             Error::CannotGenerateWebsite(err) => write!(f, "Could not generate website: {err}"),
             Error::CannotGenerateDataFiles(err) => write!(f, "Could not generate data files: {err}"),
             Error::CannotEmptyIndexJson(err) => write!(f, "Could not empty <index.json> file: {err}"),
