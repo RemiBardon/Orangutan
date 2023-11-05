@@ -38,6 +38,7 @@ const TOKEN_COOKIE_NAME: &'static str = "token";
 const TOKEN_QUERY_PARAM_NAME: &'static str = "token";
 const REFRESH_TOKEN_QUERY_PARAM_NAME: &'static str = "refresh_token";
 const FORCE_QUERY_PARAM_NAME: &'static str = "force";
+const NOT_FOUND_FILE: &'static str = "/404.html";
 
 lazy_static! {
     static ref MODE: Result<String, env::VarError> = env::var("MODE");
@@ -203,7 +204,8 @@ fn _handle_request<'a>(origin: &Origin<'_>, biscuit: Option<&Biscuit>) -> Result
         return object_reader.read_object(&path)
             .map(|data| {
                 Response::build().sized_body(Cursor::new(data)).finalize()
-            });
+            })
+            .ok_or(not_found());
         // let file_path = WEBSITE_DIR.join(path.strip_prefix("/").unwrap());
         // return match LocalObjectReader::serve_file(file_path) {
         //     Ok(data) => {
@@ -262,7 +264,8 @@ fn _handle_request<'a>(origin: &Origin<'_>, biscuit: Option<&Biscuit>) -> Result
         }
     }
 
-    let data: Vec<u8> = object_reader.read_object(object_key)?;
+    let data: Vec<u8> = object_reader.read_object(object_key)
+        .ok_or(not_found())?;
 
     match decrypt(data, profile) {
         Ok(decrypted_data) => {
@@ -279,17 +282,37 @@ fn _handle_request<'a>(origin: &Origin<'_>, biscuit: Option<&Biscuit>) -> Result
 }
 
 fn not_found<'a>() -> Response<'a> {
-    Response::build()
-        .status(Status::NotFound)
-        // TODO: Re-enable Basic authentication
-        // .raw_header("WWW-Authenticate", "Basic realm=\"This page is protected. Please log in.\"")
-        .sized_body(Cursor::new("This page doesn't exist or you are not allowed to see it."))
-        .finalize()
+    let object_reader = <dyn ObjectReader>::detect();
+    let profile = DEFAULT_PROFILE;
+    return object_reader.read_object(&format!("{}@{}", NOT_FOUND_FILE, profile))
+        .map(|data| {
+            match decrypt(data, profile) {
+                Ok(decrypted_data) => {
+                    Ok(Response::build().sized_body(Cursor::new(decrypted_data)).finalize())
+                },
+                Err(err) => {
+                    debug!("Error decrypting file: {:?}", err);
+                    Err(Response::build()
+                        .status(Status::InternalServerError)
+                        .sized_body(Cursor::new("Internal Server Error"))
+                        .finalize())
+                },
+            }
+            .unwrap_or_else(|r| r)
+        })
+        .unwrap_or(Response::build()
+            .status(Status::NotFound)
+            // TODO: Re-enable Basic authentication
+            // .raw_header("WWW-Authenticate", "Basic realm=\"This page is protected. Please log in.\"")
+            .sized_body(Cursor::new("This page doesn't exist or you are not allowed to see it."))
+            .finalize()
+        );
 }
 
 trait ObjectReader {
     fn list_objects(&self, prefix: &str) -> Result<Vec<String>, Error>;
-    fn read_object<'a>(&self, object_key: &str) -> Result<Vec<u8>, Response<'a>>;
+    // TODO: Change result type to Result<Vec<u8>, Error>
+    fn read_object(&self, object_key: &str) -> Option<Vec<u8>>;
 }
 
 impl dyn ObjectReader {
@@ -329,7 +352,7 @@ impl ObjectReader for S3ObjectReader {
             })
     }
 
-    fn read_object<'a>(&self, object_key: &str) -> Result<Vec<u8>, Response<'a>> {
+    fn read_object(&self, object_key: &str) -> Option<Vec<u8>> {
         let s3_req = GetObjectRequest {
             bucket: BUCKET_NAME.to_string(),
             key: object_key.to_string(),
@@ -348,25 +371,25 @@ impl ObjectReader for S3ObjectReader {
             })
             .map_err(|err| {
                 error!("Error getting S3 object: {}", err);
-                not_found()
             })
+            .ok()
     }
 }
 
 struct LocalObjectReader {}
 
 impl LocalObjectReader {
-    fn serve_file<'a>(file_path: PathBuf) -> Result<Vec<u8>, Response<'a>> {
+    fn serve_file(file_path: PathBuf) -> Option<Vec<u8>> {
         if let Ok(mut file) = File::open(&file_path) {
             let mut data: Vec<u8> = Vec::new();
             if let Err(err) = file.read_to_end(&mut data) {
                 debug!("Could not read <{}> from disk: {}", file_path.display(), err);
-                return Err(not_found())
+                return None
             }
-            Ok(data)
+            Some(data)
         } else {
             debug!("Could not read <{}> from disk: Cannot open file", file_path.display());
-            Err(not_found())
+            None
         }
     }
 }
@@ -384,7 +407,7 @@ impl ObjectReader for LocalObjectReader {
             .collect())
     }
 
-    fn read_object<'a>(&self, object_key: &str) -> Result<Vec<u8>, Response<'a>> {
+    fn read_object(&self, object_key: &str) -> Option<Vec<u8>> {
         let file_path = WEBSITE_DIR.join(object_key.strip_prefix("/").unwrap());
         trace!("Reading '{}' from disk at <{}>…", object_key, file_path.display());
 
