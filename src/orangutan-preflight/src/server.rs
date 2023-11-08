@@ -264,15 +264,13 @@ fn _handle_request<'a>(origin: &Origin<'_>, biscuit: Option<&Biscuit>) -> Result
         }
     }
 
-    let data: Vec<u8> = object_reader.read_object(object_key)
-        .ok_or(not_found())?;
-
-    match decrypt(data, profile) {
-        Ok(decrypted_data) => {
-            Ok(Response::build().sized_body(Cursor::new(decrypted_data)).finalize())
-        },
-        Err(err) => {
-            debug!("Error decrypting file: {:?}", err);
+    match object_reader.read_object_decrypted(object_key, profile) {
+        Ok(Some(decrypted_data)) => Ok(Response::build()
+            .sized_body(Cursor::new(decrypted_data))
+            .finalize()
+        ),
+        Ok(None) => Err(not_found()),
+        Err(_) => {
             Err(Response::build()
                 .status(Status::InternalServerError)
                 .sized_body(Cursor::new("Internal Server Error"))
@@ -283,30 +281,24 @@ fn _handle_request<'a>(origin: &Origin<'_>, biscuit: Option<&Biscuit>) -> Result
 
 fn not_found<'a>() -> Response<'a> {
     let object_reader = <dyn ObjectReader>::detect();
-    let profile = DEFAULT_PROFILE;
-    return object_reader.read_object(&format!("{}@{}", NOT_FOUND_FILE, profile))
-        .map(|data| {
-            match decrypt(data, profile) {
-                Ok(decrypted_data) => {
-                    Ok(Response::build().sized_body(Cursor::new(decrypted_data)).finalize())
-                },
-                Err(err) => {
-                    debug!("Error decrypting file: {:?}", err);
-                    Err(Response::build()
-                        .status(Status::InternalServerError)
-                        .sized_body(Cursor::new("Internal Server Error"))
-                        .finalize())
-                },
-            }
-            .unwrap_or_else(|r| r)
-        })
-        .unwrap_or(Response::build()
+
+    match object_reader.read_file_decrypted(NOT_FOUND_FILE, DEFAULT_PROFILE) {
+        Ok(Some(decrypted_data)) => Response::build()
+            .sized_body(Cursor::new(decrypted_data))
+            .finalize(),
+        Ok(None) => Response::build()
             .status(Status::NotFound)
             // TODO: Re-enable Basic authentication
             // .raw_header("WWW-Authenticate", "Basic realm=\"This page is protected. Please log in.\"")
             .sized_body(Cursor::new("This page doesn't exist or you are not allowed to see it."))
-            .finalize()
-        );
+            .finalize(),
+        Err(_) => {
+            Response::build()
+                .status(Status::InternalServerError)
+                .sized_body(Cursor::new("Internal Server Error"))
+                .finalize()
+        },
+    }
 }
 
 trait ObjectReader {
@@ -320,6 +312,24 @@ impl dyn ObjectReader {
         match MODE.clone().unwrap_or("".to_string()).as_str() {
             "S3" => Box::new(S3ObjectReader {}),
             "ENV" | _ => Box::new(LocalObjectReader {}),
+        }
+    }
+
+    fn read_file_decrypted(&self, path: &str, profile: &str) -> Result<Option<Vec<u8>>, Error> {
+        let object_key = format!("{}@{}", path, profile);
+        self.read_object_decrypted(&object_key, profile)
+    }
+
+    fn read_object_decrypted(&self, object_key: &str, profile: &str) -> Result<Option<Vec<u8>>, Error> {
+        match self.read_object(&object_key) {
+            Some(data) => match decrypt(data, profile) {
+                Ok(decrypted_data) => Ok(Some(decrypted_data)),
+                Err(err) => {
+                    debug!("Error decrypting file: {:?}", err);
+                    Err(Error::CouldNotDecryptFile(Box::new(err)))
+                },
+            },
+            None => Ok(None),
         }
     }
 }
@@ -961,7 +971,8 @@ enum Error {
     Env(env::VarError),
     AES(aes_gcm::Error),
     BiscuitFormat(biscuit::error::Format),
-    RusotoListObject(rusoto_core::RusotoError<rusoto_s3::ListObjectsV2Error>)
+    RusotoListObject(rusoto_core::RusotoError<rusoto_s3::ListObjectsV2Error>),
+    CouldNotDecryptFile(Box<Error>),
 }
 
 impl fmt::Display for Error {
@@ -972,6 +983,7 @@ impl fmt::Display for Error {
             Error::AES(err) => err.fmt(f),
             Error::BiscuitFormat(err) => err.fmt(f),
             Error::RusotoListObject(err) => err.fmt(f),
+            Error::CouldNotDecryptFile(err) => write!(f, "Error decrypting file: {err}")
         }
     }
 }
