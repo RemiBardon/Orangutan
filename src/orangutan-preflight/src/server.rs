@@ -936,7 +936,9 @@ fn find(dir: &PathBuf, files: &mut Vec<PathBuf>) {
 }
 
 fn decrypt(encrypted_data: Vec<u8>, key_name: &str) -> Result<Vec<u8>, Error> {
-    let key = <dyn KeysReader>::detect().get_key(key_name)?;
+    let keys_reader = <dyn KeysReader>::detect();
+    let key = keys_reader.get_key(key_name)
+        .or(keys_reader.get_key(DEFAULT_PROFILE))?;
     let cipher = Aes256Gcm::new(&key);
 
     // Separate the nonce and ciphertext

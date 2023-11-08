@@ -207,7 +207,8 @@ fn encrypt_file(in_file: &PathBuf, key_name: &str) -> Result<(), Error> {
 
     // Encrypt the text
     let keys_reader = <dyn KeysReader>::detect();
-    let key = keys_reader.get_key(key_name)?;
+    let key = keys_reader.get_key(key_name)
+        .or(keys_reader.get_key(DEFAULT_PROFILE))?;
     let cipher = Aes256Gcm::new(&key);
     let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
     let ciphertext = cipher.encrypt(&nonce, plaintext.as_ref()).map_err(Error::AES)?;
