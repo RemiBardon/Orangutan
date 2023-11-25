@@ -153,7 +153,11 @@ pub fn generate_data_files_if_needed() -> Result<(), Error> {
 pub fn hugo_gen(params: Vec<&str>, destination: String) -> Result<(), Error> {
     let mut _command = Command::new("hugo");
 
-    let base_params: Vec<&str> = vec!["--destination", destination.as_str()];
+    let website_root = WEBSITE_ROOT.display().to_string();
+    let base_params: Vec<&str> = vec![
+        "--source", website_root.as_str(),
+        "--destination", destination.as_str(),
+    ];
     let params = base_params.iter().chain(params.iter());
     let command = _command.args(params);
 
@@ -169,6 +173,11 @@ pub fn hugo_gen(params: Vec<&str>, destination: String) -> Result<(), Error> {
 pub fn hugo(params: Vec<&str>) -> Result<Vec<u8>, Error> {
     let mut _command = Command::new("hugo");
 
+    let website_root = WEBSITE_ROOT.display().to_string();
+    let base_params: Vec<&str> = vec![
+        "--source", website_root.as_str(),
+    ];
+    let params = base_params.iter().chain(params.iter());
     let command = _command.args(params);
 
     trace!("Running `{:?}`…", command);
