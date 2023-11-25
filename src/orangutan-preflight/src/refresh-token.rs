@@ -11,7 +11,7 @@ use biscuit::Biscuit;
 use biscuit::macros::{fact, block};
 #[macro_use]
 extern crate lazy_static;
-use log::{error, trace};
+use tracing::{error, trace};
 
 const ROOT_KEY_NAME: &'static str = "_biscuit_root";
 
