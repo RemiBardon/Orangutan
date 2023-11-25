@@ -151,27 +151,34 @@ pub fn generate_data_files_if_needed() -> Result<(), Error> {
 }
 
 pub fn hugo_gen(params: Vec<&str>, destination: String) -> Result<(), Error> {
+    let mut _command = Command::new("hugo");
+
     let base_params: Vec<&str> = vec!["--destination", destination.as_str()];
     let params = base_params.iter().chain(params.iter());
-    trace!("Running `hugo {}`…", params.clone().map(|s| s.to_string()).collect::<Vec<_>>().join(" "));
-    let status = Command::new("hugo")
-        .args(params)
+    let command = _command.args(params);
+
+    trace!("Running `{:?}`…", command);
+    let status = command
         .status()
-        .map_err(Error::CannotExecuteCommand)?;
+        .map_err(|e| Error::CannotExecuteCommand(format!("{:?}", command), e))?;
 
     status.exit_ok()
-        .map_err(Error::CommandExecutionFailed)
+        .map_err(|e| Error::CommandExecutionFailed(format!("{:?}", command), e))
 }
 
 pub fn hugo(params: Vec<&str>) -> Result<Vec<u8>, Error> {
-    let output = Command::new("hugo")
-        .args(params)
+    let mut _command = Command::new("hugo");
+
+    let command = _command.args(params);
+
+    trace!("Running `{:?}`…", command);
+    let output = command
         .stdout(Stdio::piped())
         .output()
-        .map_err(Error::CannotExecuteCommand)?;
+        .map_err(|e| Error::CannotExecuteCommand(format!("{:?}", command), e))?;
 
     output.status.exit_ok()
-        .map_err(Error::CommandExecutionFailed)?;
+        .map_err(|e| Error::CommandExecutionFailed(format!("{:?}", command), e))?;
 
     Ok(output.stdout.clone())
 }
@@ -186,8 +193,8 @@ fn empty_index_json(website_dir: &PathBuf) -> Result<(), io::Error> {
 
 #[derive(Debug)]
 pub enum Error {
-    CannotExecuteCommand(io::Error),
-    CommandExecutionFailed(ExitStatusError),
+    CannotExecuteCommand(String, io::Error),
+    CommandExecutionFailed(String, ExitStatusError),
     CannotGenerateWebsite(Box<Error>),
     CannotEmptyIndexJson(io::Error),
     CannotCreateHugoConfigFile(io::Error),
@@ -196,8 +203,8 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::CannotExecuteCommand(err) => write!(f, "Could not execute command: {err}"),
-            Error::CommandExecutionFailed(err) => write!(f, "Command failed: {err}"),
+            Error::CannotExecuteCommand(command, err) => write!(f, "Could not execute command `{command}`: {err}"),
+            Error::CommandExecutionFailed(command, err) => write!(f, "Command `{command}` failed: {err}"),
             Error::CannotGenerateWebsite(err) => write!(f, "Could not generate website: {err}"),
             Error::CannotEmptyIndexJson(err) => write!(f, "Could not empty <index.json> file: {err}"),
             Error::CannotCreateHugoConfigFile(err) => write!(f, "Could create hugo config file: {err}"),
