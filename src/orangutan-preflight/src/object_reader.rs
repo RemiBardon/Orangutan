@@ -1,12 +1,13 @@
 use std::{io::Read, path::PathBuf, fs::{File, self}, fmt};
 
-use crate::config::*;
+use crate::config::WebsiteId;
+use crate::generate::{self, generate_website_if_needed};
 use tracing::{debug, trace};
 
 pub trait ObjectReader {
-    fn list_objects(&self, prefix: &str) -> Result<Vec<String>, Error>;
+    fn list_objects(&self, prefix: &str, website_id: &WebsiteId) -> Result<Vec<String>, Error>;
     // TODO: Change result type to Result<Vec<u8>, Error>
-    fn read_object(&self, object_key: &str) -> Option<Vec<u8>>;
+    fn read_object(&self, object_key: &str, website_id: &WebsiteId) -> Option<Vec<u8>>;
 }
 
 impl dyn ObjectReader {
@@ -33,20 +34,27 @@ impl LocalObjectReader {
 }
 
 impl ObjectReader for LocalObjectReader {
-    fn list_objects(&self, prefix: &str) -> Result<Vec<String>, Error> {
-        trace!("Listing files with prefix '{}' in <{}>…", prefix, WEBSITE_DIR.display());
-        Ok(find_all_files(&WEBSITE_DIR).iter()
+    fn list_objects(&self, prefix: &str, website_id: &WebsiteId) -> Result<Vec<String>, Error> {
+        trace!("Listing files with prefix '{}' for {}…", prefix, website_id);
+
+        let website_dir = generate_website_if_needed(website_id)
+            .map_err(Error::WebsiteGenerationError)?;
+
+        Ok(find_all_files(&website_dir).iter()
             .map(|path|
                 format!("/{}", path
-                    .strip_prefix(WEBSITE_DIR.as_path())
+                    .strip_prefix(website_dir.as_path())
                     .expect("Could not remove prefix")
                     .display())
             )
             .collect())
     }
 
-    fn read_object(&self, object_key: &str) -> Option<Vec<u8>> {
-        let file_path = WEBSITE_DIR.join(object_key.strip_prefix("/").unwrap());
+    fn read_object(&self, object_key: &str, website_id: &WebsiteId) -> Option<Vec<u8>> {
+        let Ok(website_dir) = generate_website_if_needed(website_id) else {
+            return None
+        };
+        let file_path = website_dir.join(object_key.strip_prefix("/").unwrap());
         trace!("Reading '{}' from disk at <{}>…", object_key, file_path.display());
 
         Self::serve_file(file_path)
@@ -74,12 +82,13 @@ fn find(dir: &PathBuf, files: &mut Vec<PathBuf>) {
 
 #[derive(Debug)]
 pub enum Error {
+    WebsiteGenerationError(generate::Error),
 }
 
 impl fmt::Display for Error {
-    fn fmt(&self, _f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            _ => todo!(),
+            Error::WebsiteGenerationError(err) => write!(f, "Website generation error: {err}"),
         }
     }
 }

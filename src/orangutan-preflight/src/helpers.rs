@@ -1,12 +1,23 @@
-use std::{path::{PathBuf, Path}, collections::HashSet, fs::{self, File}, io};
+use std::{path::{PathBuf, Path}, collections::HashSet, fs::{self, File}, io, sync::Mutex};
 
 use serde_json::{self, Value};
 use tracing::{trace, debug, error};
 
 use crate::config::*;
 
-pub fn all_profiles() -> HashSet<String> {
-    let mut all_profiles: HashSet<String> = HashSet::new();
+lazy_static! {
+    static ref USED_PROFILES: Mutex<Option<&'static HashSet<String>>> = Mutex::new(None);
+}
+
+pub fn used_profiles<'a>() -> &'a HashSet<String> {
+    let mut used_profiles = USED_PROFILES.lock().unwrap();
+    if let Some(profiles) = used_profiles.clone() {
+        trace!("Read used profiles from cache");
+        return profiles
+    }
+
+    debug!("Reading used profiles…");
+    let acc: &'static mut HashSet<String> = Box::leak(Box::new(HashSet::new()));
 
     for data_file in find_data_files() {
         trace!("Reading <{}>…", data_file.display());
@@ -19,10 +30,12 @@ pub fn all_profiles() -> HashSet<String> {
         debug!("  read_allowed: {:?}", read_allowed);
 
         // Store new profiles
-        read_allowed.iter().for_each(|p| { all_profiles.insert(p.clone()); });
+        read_allowed.iter().for_each(|p| { acc.insert(p.clone()); });
     }
 
-    all_profiles
+    *used_profiles = Some(acc);
+
+    acc
 }
 
 pub fn find(dir: &PathBuf, extensions: &Vec<&str>, files: &mut Vec<PathBuf>) {
@@ -112,4 +125,27 @@ pub fn object_key<P: AsRef<Path>>(path: &P, profile: &str) -> String {
         }
     }
     path.display().to_string()
+}
+
+pub fn copy_directory(src: &std::path::Path, dest: &std::path::Path) -> io::Result<()> {
+    if src.is_file() {
+        // If the source is a file, copy it to the destination
+        fs::copy(src, dest)?;
+    } else if src.is_dir() {
+        // If the source is a directory, create a corresponding directory in the destination
+        fs::create_dir_all(dest)?;
+
+        // List the entries in the source directory
+        let entries = fs::read_dir(src)?;
+
+        for entry in entries {
+            let entry = entry?;
+            let entry_dest = dest.join(entry.file_name());
+
+            // Recursively copy each entry in the source directory to the destination directory
+            copy_directory(&entry.path(), &entry_dest)?;
+        }
+    }
+
+    Ok(())
 }

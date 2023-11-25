@@ -1,14 +1,15 @@
-#![feature(proc_macro_hygiene, decl_macro, never_type)]
+#![feature(proc_macro_hygiene, decl_macro, never_type, exit_status_error)]
 
 #[macro_use] extern crate rocket;
 
 mod config;
+mod generate;
 mod helpers;
 mod keys_reader;
 mod object_reader;
 
 extern crate time;
-use helpers::read_allowed;
+use biscuit::builder::{Fact, Term};
 use object_reader::ObjectReader;
 use rocket::http::hyper::header::{Location, CacheControl, Pragma, CacheDirective};
 use time::Duration;
@@ -18,6 +19,7 @@ use rocket::{Request, request, Outcome, Response};
 use rocket::request::FromRequest;
 use tracing::Level;
 use tracing_subscriber::FmtSubscriber;
+use std::fmt;
 use std::io::Cursor;
 use std::time::SystemTime;
 use std::path::{PathBuf, Path};
@@ -31,6 +33,7 @@ use biscuit::macros::authorizer;
 use urlencoding::decode;
 
 use crate::config::*;
+use crate::generate::*;
 use crate::helpers::*;
 use crate::keys_reader::KeysReader;
 
@@ -65,7 +68,15 @@ fn main() {
     }
 }
 
-fn throwing_main() -> Result<(), std::io::Error> {
+fn throwing_main() -> Result<(), Error> {
+    // Generate the website
+    generate_website_if_needed(&WebsiteId::default())
+        .map_err(Error::WebsiteGenerationError)?;
+
+    // Generate Orangutan data files
+    generate_data_files_if_needed()
+        .map_err(Error::CannotGenerateDataFiles)?;
+
     rocket::ignite()
         .mount("/", routes![
             get_index,
@@ -157,9 +168,24 @@ fn _handle_request<'a>(
     let path = decode(origin.path()).unwrap().into_owned();
     trace!("GET {}", &path);
 
+    let user_profiles: Vec<String> = biscuit
+        .map(|b| b
+            .authorizer().unwrap()
+            .query_all("data($name) <- profile($name)").unwrap()
+            .iter().map(|f: &Fact|
+                match f.predicate.terms.get(0).unwrap() {
+                    Term::Str(s) => s.clone(),
+                    t => panic!("Term {t} should be of type String"),
+                }
+            )
+            .collect()
+        )
+        .unwrap_or_default();
+    let website_id = WebsiteId::from(&user_profiles);
+
     let object_reader = <dyn ObjectReader>::detect();
 
-    let stored_objects: Vec<String> = match object_reader.list_objects(&path) {
+    let stored_objects: Vec<String> = match object_reader.list_objects(&path, &website_id) {
         Ok(o) => o,
         Err(err) => {
             error!("Error when listing objects matching '{}': {}", &path, err);
@@ -175,7 +201,7 @@ fn _handle_request<'a>(
     let Some(allowed_profiles) = allowed_profiles else {
         // If allowed profiles is empty, it means it's a static file
         trace!("File <{}> did not explicitly allow profiles, serving static file", &path);
-        return object_reader.read_object(&object_key)
+        return object_reader.read_object(&object_key, &website_id)
             .map(|data| {
                 Response::build().sized_body(Cursor::new(data)).finalize()
             })
@@ -214,7 +240,7 @@ fn _handle_request<'a>(
         return Err(not_found())
     }
 
-    match object_reader.read_object(object_key) {
+    match object_reader.read_object(object_key, &website_id) {
         Some(data) => Ok(Response::build()
             .sized_body(Cursor::new(data))
             .finalize()
@@ -232,7 +258,7 @@ fn allowed_profiles<'a>(path: &String) -> Option<Vec<String>> {
 fn not_found<'a>() -> Response<'a> {
     let object_reader = <dyn ObjectReader>::detect();
 
-    match object_reader.read_object(&object_key(&NOT_FOUND_FILE, DEFAULT_PROFILE)) {
+    match object_reader.read_object(&NOT_FOUND_FILE, &WebsiteId::default()) {
         Some(data) => Response::build()
             .sized_body(Cursor::new(data))
             .finalize(),
@@ -479,6 +505,21 @@ fn add_padding(base64_string: &str) -> String {
         // If the base64 string doesn't have a multiple of 4 characters,
         // create a new string with the required padding characters.
         n => format!("{}{}", base64_string, "=".repeat(4 - n)),
+    }
+}
+
+#[derive(Debug)]
+enum Error {
+    WebsiteGenerationError(generate::Error),
+    CannotGenerateDataFiles(generate::Error),
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Error::WebsiteGenerationError(err) => write!(f, "Website generation error: {err}"),
+            Error::CannotGenerateDataFiles(err) => write!(f, "Could not generate data files: {err}"),
+        }
     }
 }
 
