@@ -6,17 +6,74 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use lazy_static;
 use std::collections::HashSet;
 use std::env;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{PathBuf, Path};
-use std::process::{Command, ExitStatusError};
-use tracing::{info, debug};
+use std::process::{Command, ExitStatusError, Stdio};
+use tracing::{info, debug, trace};
 
+static HUGO_CONFIG_GENERATED: AtomicBool = AtomicBool::new(false);
 static DATA_FILES_GENERATED: AtomicBool = AtomicBool::new(false);
 
 lazy_static! {
     // NOTE: `Arc` prevents race conditions
     static ref GENERATED_WEBSITES: Arc<Mutex<HashSet<PathBuf>>> = Arc::new(Mutex::new(HashSet::new()));
+}
+
+fn _copy_hugo_config() -> Result<(), Error> {
+    debug!("Copying hugo config…");
+
+    // Create config dir
+    let config_dir = HUGO_CONFIG_DIR.join("_default");
+    fs::create_dir_all(&config_dir)
+        .map_err(Error::CannotCreateHugoConfigFile)?;
+    debug!("Hugo config will be saved in <{}>", &config_dir.display());
+
+    // Read current config
+    let base_config = hugo(vec!["config"])?;
+    debug!("🤪 Base config: {}", &String::from_utf8_lossy(&base_config));
+
+    // Write new config file
+    let config_file = config_dir.join("hugo.toml");
+    let res = File::create(config_file)
+        .map_err(Error::CannotCreateHugoConfigFile)?
+        .write_all(&base_config)
+        .map_err(Error::CannotCreateHugoConfigFile)?;
+
+    HUGO_CONFIG_GENERATED.store(true, Ordering::Relaxed);
+
+    Ok(res)
+}
+
+fn gen_hugo_config(website_id: &WebsiteId) -> Result<(), Error> {
+    // Create config dir
+    let config_dir = HUGO_CONFIG_DIR.join(website_id.dir_name());
+    fs::create_dir_all(&config_dir)
+        .map_err(Error::CannotCreateHugoConfigFile)?;
+
+    // Create new config
+    let profiles: Vec<String> = website_id.profiles.iter().map(|s| s.clone()).collect();
+    let profiles_json = serde_json::to_string(&profiles).unwrap();
+    let config = format!("[Params]
+  currentProfiles = {}
+", profiles_json);
+
+    // Write new config file
+    let config_file = config_dir.join("hugo.toml");
+    let res = File::create(config_file)
+        .map_err(Error::CannotCreateHugoConfigFile)?
+        .write_all(&config.as_bytes())
+        .map_err(Error::CannotCreateHugoConfigFile)?;
+
+    Ok(res)
+}
+
+fn copy_hugo_config_if_needed() -> Result<(), Error> {
+    if HUGO_CONFIG_GENERATED.load(Ordering::Relaxed) {
+        Ok(())
+    } else {
+        _copy_hugo_config()
+    }
 }
 
 fn generate_website(
@@ -27,11 +84,21 @@ fn generate_website(
     info!("Generating website for {:?}…", id.profiles);
     debug!("Website for {:?} will be generated at <{}>", id.profiles, destination.display());
 
-    let mut params = vec!["--disableKinds", "RSS,sitemap", "--cleanDestinationDir"];
+    copy_hugo_config_if_needed()?;
+    gen_hugo_config(id)?;
+
+    let config_dir = HUGO_CONFIG_DIR.display().to_string();
+    let environment = id.dir_name();
+    let mut params = vec![
+        "--disableKinds", "RSS,sitemap",
+        "--cleanDestinationDir",
+        "--configDir", &config_dir,
+        "--environment", &environment,
+    ];
     if env::var("LOCALHOST") == Ok("true".to_string()) {
         params.append(&mut vec!["--baseURL", "http://localhost:8080"]);
     }
-    hugo(params, destination.display().to_string())
+    let res = hugo_gen(params, destination.display().to_string())
         .map_err(|e| Error::CannotGenerateWebsite(Box::new(e)))?;
 
     // Temporary fix to avoid leakage of page existence and content
@@ -40,7 +107,7 @@ fn generate_website(
 
     generated_websites.insert(destination.clone());
 
-    Ok(())
+    Ok(res)
 }
 
 /// Generate the website
@@ -65,7 +132,7 @@ fn _generate_data_files() -> Result<(), Error> {
     let shortcodes_dest_dir = Path::new(&shortcodes_dest_dir_path);
     copy_directory(shortcodes_dir, shortcodes_dest_dir).unwrap();
 
-    let res = hugo(
+    let res = hugo_gen(
         vec!["--disableKinds", "RSS,sitemap,home", "--theme", THEME_NAME],
         WEBSITE_DATA_DIR.display().to_string()
     )?;
@@ -83,15 +150,30 @@ pub fn generate_data_files_if_needed() -> Result<(), Error> {
     }
 }
 
-pub fn hugo(params: Vec<&str>, destination: String) -> Result<(), Error> {
+pub fn hugo_gen(params: Vec<&str>, destination: String) -> Result<(), Error> {
     let base_params: Vec<&str> = vec!["--destination", destination.as_str()];
+    let params = base_params.iter().chain(params.iter());
+    trace!("Running `hugo {}`…", params.clone().map(|s| s.to_string()).collect::<Vec<_>>().join(" "));
     let status = Command::new("hugo")
-        .args(base_params.iter().chain(params.iter()))
+        .args(params)
         .status()
         .map_err(Error::CannotExecuteCommand)?;
 
     status.exit_ok()
         .map_err(Error::CommandExecutionFailed)
+}
+
+pub fn hugo(params: Vec<&str>) -> Result<Vec<u8>, Error> {
+    let output = Command::new("hugo")
+        .args(params)
+        .stdout(Stdio::piped())
+        .output()
+        .map_err(Error::CannotExecuteCommand)?;
+
+    output.status.exit_ok()
+        .map_err(Error::CommandExecutionFailed)?;
+
+    Ok(output.stdout.clone())
 }
 
 fn empty_index_json(website_dir: &PathBuf) -> Result<(), io::Error> {
@@ -108,6 +190,7 @@ pub enum Error {
     CommandExecutionFailed(ExitStatusError),
     CannotGenerateWebsite(Box<Error>),
     CannotEmptyIndexJson(io::Error),
+    CannotCreateHugoConfigFile(io::Error),
 }
 
 impl fmt::Display for Error {
@@ -117,6 +200,7 @@ impl fmt::Display for Error {
             Error::CommandExecutionFailed(err) => write!(f, "Command failed: {err}"),
             Error::CannotGenerateWebsite(err) => write!(f, "Could not generate website: {err}"),
             Error::CannotEmptyIndexJson(err) => write!(f, "Could not empty <index.json> file: {err}"),
+            Error::CannotCreateHugoConfigFile(err) => write!(f, "Could create hugo config file: {err}"),
         }
     }
 }

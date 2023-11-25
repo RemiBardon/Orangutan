@@ -21,6 +21,7 @@ const WEBSITE_DIR_NAME: &'static str = "website";
 lazy_static! {
     pub static ref BASE_DIR: &'static Path = Path::new(".orangutan");
     pub static ref KEYS_DIR: PathBuf = BASE_DIR.join("keys");
+    pub static ref HUGO_CONFIG_DIR: PathBuf = BASE_DIR.join("hugo-config");
     pub static ref DEST_DIR: PathBuf = BASE_DIR.join("out");
     pub static ref WEBSITE_DATA_DIR: PathBuf = DEST_DIR.join("data");
     pub static ref SUFFIXED_EXTENSIONS: Vec<&'static str> = vec!["html", "json", "xml", "css", "js", "txt"];
@@ -34,7 +35,7 @@ pub struct WebsiteId {
 }
 
 impl WebsiteId {
-    fn dir_name(&self) -> String {
+    pub fn name(&self) -> String {
         // Convert HashSet<String> back to Vec<String> for sorting
         let mut unique_profiles: Vec<String> = self.profiles.clone().into_iter().collect();
 
@@ -43,6 +44,10 @@ impl WebsiteId {
 
         // Join sorted profiles with ","
         unique_profiles.join(",")
+    }
+
+    pub fn dir_name(&self) -> String {
+        format!("{}@{}", WEBSITE_DIR_NAME, self.name()).to_string()
     }
 }
 
@@ -84,5 +89,5 @@ impl Default for WebsiteId {
 /// Website directory is suffixed by "@<p>" where "p" is a list of profiles,
 /// sorted alphabetically and joined with ",".
 pub fn website_dir(id: &WebsiteId) -> PathBuf {
-    DEST_DIR.join(format!("{}@{}", WEBSITE_DIR_NAME, id.dir_name()))
+    DEST_DIR.join(id.dir_name())
 }
