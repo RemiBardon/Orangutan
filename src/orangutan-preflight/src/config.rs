@@ -19,7 +19,7 @@ pub const NOT_FOUND_FILE: &'static str = "/404.html";
 const WEBSITE_DIR_NAME: &'static str = "website";
 
 lazy_static! {
-    pub static ref WEBSITE_ROOT_PATH: String = env::var("WEBSITE_ROOT").unwrap_or(".".to_string());
+    pub static ref WEBSITE_ROOT_PATH: String = env::var("APP_HOME").unwrap_or(".".to_string());
     pub static ref WEBSITE_ROOT: &'static Path = Path::new(WEBSITE_ROOT_PATH.as_str());
     pub static ref BASE_DIR: PathBuf = WEBSITE_ROOT.join(".orangutan");
     pub static ref KEYS_DIR: PathBuf = BASE_DIR.join("keys");
