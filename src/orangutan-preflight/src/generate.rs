@@ -31,7 +31,6 @@ fn _copy_hugo_config() -> Result<(), Error> {
 
     // Read current config
     let base_config = hugo(vec!["config"])?;
-    debug!("🤪 Base config: {}", &String::from_utf8_lossy(&base_config));
 
     // Write new config file
     let config_file = config_dir.join("hugo.toml");
