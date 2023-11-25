@@ -92,8 +92,11 @@ fn throwing_main() -> Result<(), Error> {
 }
 
 #[get("/")]
-fn get_index<'a>(origin: &Origin) -> Response<'a> {
-    _handle_request(origin, None)
+fn get_index<'a>(
+    origin: &Origin,
+    token: Option<Token>,
+) -> Response<'a> {
+    _handle_request(origin, token.map(|t| t.biscuit))
         .unwrap_or_else(|e| e)
 }
 
@@ -150,7 +153,7 @@ fn handle_request_authenticated<'a>(
     cookies: Cookies
 ) -> Response<'a> {
     add_cookie_if_necessary(&token, cookies);
-    _handle_request(origin, Some(&token.biscuit))
+    _handle_request(origin, Some(token.biscuit))
         .unwrap_or_else(|e| e)
 }
 
@@ -162,13 +165,13 @@ fn handle_request<'a>(_path: PathBuf, origin: &'a Origin<'a>) -> Response<'a> {
 
 fn _handle_request<'a>(
     origin: &Origin<'_>,
-    biscuit: Option<&Biscuit>
+    biscuit: Option<Biscuit>
 ) -> Result<Response<'a>, Response<'a>> {
     // FIXME: Handle error
     let path = decode(origin.path()).unwrap().into_owned();
     trace!("GET {}", &path);
 
-    let user_profiles: Vec<String> = biscuit
+    let user_profiles: Vec<String> = biscuit.as_ref()
         .map(|b| b
             .authorizer().unwrap()
             .query_all("data($name) <- profile($name)").unwrap()
