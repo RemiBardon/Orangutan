@@ -3,16 +3,16 @@
 GENERATOR='https://kroki.io'
 OUT_FORMAT='svg'
 DEFAULT_SOURCE_DIR='diagrams'
-DEST_DIR='assets'
-CACHE_DIR="${DEST_DIR}"/.gen-cache
+DEFAULT_DEST_DIR='assets'
 
 echo 'Rendering diagrams written in PlantUML, Mermaid or BPMN formats…'
 echo ''
 
 usage() {
-    echo 'Usage: '"$0"' [<force> [<source_dir>]]'
+    echo 'Usage: '"$0"' [<force> [<source_dir> [<source_dir>]]]'
     echo '  force          Empty cache directory if `-f`, do nothing otherwise. (default: NO)'
     echo '  source_dir     Path to the directory containing sources. (default: <'"${DEFAULT_SOURCE_DIR}"'>)'
+    echo '  dest_dir       Path to the directory containing assets. (default: <'"${DEFAULT_DEST_DIR}"'>)'
 }
 
 error() {
@@ -22,11 +22,14 @@ error() {
     exit 1
 }
 
-[[ ($# -le 2) ]] || error 'Bad arguments'
+[[ ($# -le 3) ]] || error 'Bad arguments'
 
 FORCE="$1"
 SOURCE_DIR="${2:-"${DEFAULT_SOURCE_DIR}"}"
 [[ -d "${SOURCE_DIR}" ]] || error "Source directory <${SOURCE_DIR}> does not exist"
+DEST_DIR="${3:-"${DEFAULT_DEST_DIR}"}"
+[[ -d "${DEST_DIR}" ]] || error "Destination directory <${DEST_DIR}> does not exist"
+CACHE_DIR="${DEST_DIR}"/.gen-cache
 
 # Empty cache directory if force (`-f`)
 [[ "${FORCE}" == '-f' ]] && rm -rf "${CACHE_DIR}"

@@ -2,13 +2,10 @@
 
 Lightweight tool allowing private pages on a static site.
 It uses predefined profiles to identify users, with no account creation required.
-
-All pages are encrypted, and cannot be read without the decryption key.
-This key is not shared to anyone except the back-end server.
-[Biscuits](https://www.biscuitsec.org/) are used as authentication tokens,
+[Biscuits](https://www.biscuitsec.org/) are used as authorization tokens,
 removing the need for a database keeping track of created tokens.
 
-Design decisions are detailed in [`./design/README.md`](./design/README.md).
+Design decisions are detailed in [`design/README.md`](./design/README.md).
 
 ## Disclaimer 🙅
 
@@ -20,10 +17,10 @@ Design decisions are detailed in [`./design/README.md`](./design/README.md).
 
 ## Main features ✨
 
-- Private pages with predefined access
-- Pages are encrypted
-- No account creation
-- 
+- **Private pages** with predefined access
+- **No account creation**
+- **Efficient lazy website generation** so each profile sees a dedicated version of the website
+- **CLI tool** to generate refresh tokens
 
 ## Why this name? 🤨
 
