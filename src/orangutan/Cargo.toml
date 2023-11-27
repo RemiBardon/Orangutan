@@ -1,5 +1,5 @@
 [package]
-name = "orangutan-preflight"
+name = "orangutan"
 version = "0.1.0"
 edition = "2021"
 
