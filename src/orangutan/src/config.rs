@@ -44,8 +44,12 @@ impl WebsiteId {
         // Sort the profiles alphabetically
         unique_profiles.sort();
 
-        // Join sorted profiles with ","
-        unique_profiles.join(",")
+        if unique_profiles.is_empty() {
+            DEFAULT_PROFILE.to_string()
+        } else {
+            // Join sorted profiles with ","
+            unique_profiles.join(",")
+        }
     }
 
     pub fn dir_name(&self) -> String {
