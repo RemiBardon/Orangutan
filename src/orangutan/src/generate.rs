@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use std::env;
 use std::fs::{self, File};
 use std::io::{self, Write};
-use std::path::{PathBuf, Path};
+use std::path::PathBuf;
 use std::process::{Command, ExitStatusError, Stdio};
 use tracing::{info, debug, trace};
 
@@ -126,10 +126,11 @@ fn _generate_data_files() -> Result<(), Error> {
 
     // Copy some files if needed
     // FIXME: Do not hardcode "PaperMod"
-    let shortcodes_dir = Path::new("themes/PaperMod/layouts/shortcodes");
+    let shortcodes_dir = WEBSITE_ROOT.join("themes/PaperMod/layouts/shortcodes");
     let shortcodes_dest_dir_path = format!("themes/{}/layouts/shortcodes", THEME_NAME);
-    let shortcodes_dest_dir = Path::new(&shortcodes_dest_dir_path);
-    copy_directory(shortcodes_dir, shortcodes_dest_dir).unwrap();
+    let shortcodes_dest_dir = WEBSITE_ROOT.join(&shortcodes_dest_dir_path);
+    trace!("Copying shortcodes from {} to {}…", shortcodes_dir.display(), shortcodes_dest_dir.display());
+    copy_directory(&shortcodes_dir, &shortcodes_dest_dir).unwrap();
 
     let res = hugo_gen(
         vec!["--disableKinds", "RSS,sitemap,home", "--theme", THEME_NAME],
