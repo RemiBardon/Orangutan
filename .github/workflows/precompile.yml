@@ -38,10 +38,11 @@ jobs:
           key: ${{ runner.os }}-${{ matrix.target }}-cargo
 
       - name: Precompile for ${{ matrix.target }}
+        working-directory: ./src/orangutan
         run: rustup target add ${{ matrix.target }} && cargo build --release --bin orangutan-server --target ${{ matrix.target }}
 
       - uses: actions/upload-artifact@v4
         with:
           name: orangutan-server-${{ matrix.target }}
-          path: target/${{ matrix.target }}/release/orangutan-server
+          path: src/orangutan/target/${{ matrix.target }}/release/orangutan-server
           if-no-files-found: error
