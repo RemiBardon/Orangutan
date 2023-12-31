@@ -1,6 +1,6 @@
 use std::{path::{PathBuf, Path}, env, collections::HashSet, fmt::Display};
 
-use lazy_static;
+use lazy_static::lazy_static;
 
 use crate::helpers::used_profiles;
 

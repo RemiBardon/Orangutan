@@ -9,9 +9,8 @@ use iso8601_duration::Duration as IsoDuration;
 extern crate biscuit_auth as biscuit;
 use biscuit::Biscuit;
 use biscuit::macros::{fact, block};
-#[macro_use]
-extern crate lazy_static;
 use tracing::{error, trace};
+use lazy_static::lazy_static;
 
 const ROOT_KEY_NAME: &'static str = "_biscuit_root";
 

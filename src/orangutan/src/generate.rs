@@ -3,13 +3,17 @@ use crate::helpers::copy_directory;
 use core::fmt;
 use std::sync::{Mutex, MutexGuard, Arc};
 use std::sync::atomic::{AtomicBool, Ordering};
-use lazy_static;
+use std::io::Cursor;
+use rocket::request::Request;
+use rocket::response::{self, Response, Responder};
+use rocket::http::ContentType;
+use lazy_static::lazy_static;
 use std::collections::HashSet;
 use std::env;
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::PathBuf;
-use std::process::{Command, ExitStatusError, Stdio};
+use std::process::{Command, Stdio};
 use tracing::{info, debug, trace};
 
 static HUGO_CONFIG_GENERATED: AtomicBool = AtomicBool::new(false);
@@ -166,8 +170,11 @@ pub fn hugo_gen(params: Vec<&str>, destination: String) -> Result<(), Error> {
         .output()
         .map_err(|e| Error::CannotExecuteCommand(format!("{:?}", command), e))?;
 
-    output.status.exit_ok()
-        .map_err(|e| Error::CommandExecutionFailed { command: format!("{:?}", command), error: e, stderr: output.stderr })
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(Error::CommandExecutionFailed { command: format!("{:?}", command), code: output.status.code(), stderr: output.stderr })
+    }
 }
 
 pub fn hugo(params: Vec<&str>) -> Result<Vec<u8>, Error> {
@@ -186,8 +193,9 @@ pub fn hugo(params: Vec<&str>) -> Result<Vec<u8>, Error> {
         .output()
         .map_err(|e| Error::CannotExecuteCommand(format!("{:?}", command), e))?;
 
-    output.status.exit_ok()
-        .map_err(|e| Error::CommandExecutionFailed { command: format!("{:?}", command), error: e, stderr: output.stderr })?;
+    if !output.status.success() {
+        return Err(Error::CommandExecutionFailed { command: format!("{:?}", command), code: output.status.code(), stderr: output.stderr })
+    }
 
     Ok(output.stdout.clone())
 }
@@ -203,7 +211,7 @@ fn empty_index_json(website_dir: &PathBuf) -> Result<(), io::Error> {
 #[derive(Debug)]
 pub enum Error {
     CannotExecuteCommand(String, io::Error),
-    CommandExecutionFailed { command: String, error: ExitStatusError, stderr: Vec<u8> },
+    CommandExecutionFailed { command: String, code: Option<i32>, stderr: Vec<u8> },
     CannotGenerateWebsite(Box<Error>),
     CannotEmptyIndexJson(io::Error),
     CannotCreateHugoConfigFile(io::Error),
@@ -213,10 +221,21 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::CannotExecuteCommand(command, err) => write!(f, "Could not execute command `{command}`: {err}"),
-            Error::CommandExecutionFailed { command, error, stderr } => write!(f, "Command `{command}` failed: {error}\nstderr: {}", String::from_utf8_lossy(stderr)),
+            Error::CommandExecutionFailed { command, code, stderr } => write!(f, "Command `{command}` failed with exit code {:?}: {}", code, String::from_utf8_lossy(stderr)),
             Error::CannotGenerateWebsite(err) => write!(f, "Could not generate website: {err}"),
             Error::CannotEmptyIndexJson(err) => write!(f, "Could not empty <index.json> file: {err}"),
             Error::CannotCreateHugoConfigFile(err) => write!(f, "Could create hugo config file: {err}"),
         }
+    }
+}
+
+#[rocket::async_trait]
+impl<'r> Responder<'r, 'static> for Error {
+    fn respond_to(self, _: &'r Request<'_>) -> response::Result<'static> {
+        let res = self.to_string();
+        Response::build()
+            .header(ContentType::Plain)
+            .sized_body(res.len(), Cursor::new(res))
+            .ok()
     }
 }

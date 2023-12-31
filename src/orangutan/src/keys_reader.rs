@@ -6,7 +6,7 @@ use std::fs::File;
 use std::{env, path::PathBuf};
 
 extern crate biscuit_auth as biscuit;
-use lazy_static;
+use lazy_static::lazy_static;
 use tracing::trace;
 
 lazy_static! {

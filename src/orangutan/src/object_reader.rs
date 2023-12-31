@@ -1,40 +1,38 @@
-use std::{io::Read, path::PathBuf, fs::{File, self}, fmt};
+use std::{io, path::PathBuf, fs, fmt};
 
 use crate::config::WebsiteId;
 use crate::generate::{self, generate_website_if_needed};
-use tracing::{debug, trace};
+use rocket::fs::NamedFile;
+use rocket::response::Responder;
+use tracing::trace;
 
-pub trait ObjectReader {
-    fn list_objects(&self, prefix: &str, website_id: &WebsiteId) -> Result<Vec<String>, Error>;
-    // TODO: Change result type to Result<Vec<u8>, Error>
-    fn read_object(&self, object_key: &str, website_id: &WebsiteId) -> Option<Vec<u8>>;
-}
+pub type ObjectReader = LocalObjectReader;
 
-impl dyn ObjectReader {
-    pub fn detect() -> Box<dyn ObjectReader> {
-        Box::new(LocalObjectReader {})
+impl ObjectReader {
+    pub fn new() -> Self {
+        LocalObjectReader {}
     }
 }
-struct LocalObjectReader {}
+
+pub type ReadObjectResponse = LocalReadObjectResponse;
+
+pub struct LocalObjectReader;
+
+#[derive(Responder)]
+pub enum LocalReadObjectResponse {
+    #[response(status = 404)]
+    NotFound(String),
+    Found(Result<NamedFile, std::io::Error>),
+}
 
 impl LocalObjectReader {
-    fn serve_file(file_path: PathBuf) -> Option<Vec<u8>> {
-        if let Ok(mut file) = File::open(&file_path) {
-            let mut data: Vec<u8> = Vec::new();
-            if let Err(err) = file.read_to_end(&mut data) {
-                debug!("Could not read <{}> from disk: {}", file_path.display(), err);
-                return None
-            }
-            Some(data)
-        } else {
-            debug!("Could not read <{}> from disk: Cannot open file", file_path.display());
-            None
-        }
+    async fn serve_file(file_path: PathBuf) -> io::Result<NamedFile> {
+        NamedFile::open(file_path).await
     }
 }
 
-impl ObjectReader for LocalObjectReader {
-    fn list_objects(&self, prefix: &str, website_id: &WebsiteId) -> Result<Vec<String>, Error> {
+impl LocalObjectReader {
+    pub fn list_objects(&self, prefix: &str, website_id: &WebsiteId) -> Result<Vec<String>, Error> {
         trace!("Listing files with prefix '{}' for {}…", prefix, website_id);
 
         let website_dir = generate_website_if_needed(website_id)
@@ -50,14 +48,15 @@ impl ObjectReader for LocalObjectReader {
             .collect())
     }
 
-    fn read_object(&self, object_key: &str, website_id: &WebsiteId) -> Option<Vec<u8>> {
-        let Ok(website_dir) = generate_website_if_needed(website_id) else {
-            return None
+    pub async fn read_object<'r>(&self, object_key: &str, website_id: &WebsiteId) -> LocalReadObjectResponse {
+        let website_dir = match generate_website_if_needed(website_id) {
+            Ok(dir) => dir,
+            Err(err) => return LocalReadObjectResponse::NotFound(err.to_string()),
         };
         let file_path = website_dir.join(object_key.strip_prefix("/").unwrap());
         trace!("Reading '{}' from disk at <{}>…", object_key, file_path.display());
 
-        Self::serve_file(file_path)
+        LocalReadObjectResponse::Found(Self::serve_file(file_path).await)
     }
 }
 
@@ -80,8 +79,9 @@ fn find(dir: &PathBuf, files: &mut Vec<PathBuf>) {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Responder)]
 pub enum Error {
+    #[response(status = 500)]
     WebsiteGenerationError(generate::Error),
 }
 

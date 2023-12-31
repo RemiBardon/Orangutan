@@ -1,33 +1,31 @@
-#![feature(proc_macro_hygiene, decl_macro, never_type, exit_status_error)]
-
-#[macro_use] extern crate rocket;
-
 mod config;
 mod generate;
 mod helpers;
 mod keys_reader;
 mod object_reader;
 
-extern crate time;
 use biscuit::builder::{Fact, Term};
-use object_reader::ObjectReader;
-use rocket::http::hyper::header::{Location, CacheControl, Pragma, CacheDirective};
-use time::Duration;
-use rocket::http::{Status, Cookie, Cookies, SameSite, RawStr};
+use object_reader::{ObjectReader, ReadObjectResponse};
+use rocket::Either;
+use rocket::form::Errors;
+use rocket::http::CookieJar;
+use rocket::http::{Status, Cookie, SameSite};
 use rocket::http::uri::Origin;
-use rocket::{Request, request, Outcome, Response};
+use rocket::response::status::NotFound;
+use rocket::{Request, request, get, routes, catch, catchers, State};
+use rocket::response::Redirect;
 use rocket::request::FromRequest;
+use rocket::outcome::Outcome;
 use tracing::Level;
 use tracing_subscriber::FmtSubscriber;
 use std::fmt;
-use std::io::Cursor;
 use std::time::SystemTime;
 use std::path::{PathBuf, Path};
 use std::process::exit;
 use tracing::{debug, error, trace};
-#[macro_use]
-extern crate lazy_static;
-extern crate biscuit_auth as biscuit;
+use time::Duration;
+use lazy_static::lazy_static;
+use biscuit_auth as biscuit;
 use biscuit::Biscuit;
 use biscuit::macros::authorizer;
 use urlencoding::decode;
@@ -50,7 +48,8 @@ lazy_static! {
     };
 }
 
-fn main() {
+#[rocket::main]
+async fn main() {
     let subscriber = FmtSubscriber::builder()
         .with_max_level(Level::DEBUG)
         .finish();
@@ -62,42 +61,37 @@ fn main() {
     //     .target(env_logger::Target::Stdout)
     //     .init();
 
-    if let Err(err) = throwing_main() {
+    if let Err(err) = throwing_main().await {
         error!("Error: {}", err);
         exit(1);
     }
 }
 
-fn throwing_main() -> Result<(), Error> {
+async fn throwing_main() -> Result<(), Box<dyn std::error::Error>> {
     // Generate the website
     generate_website_if_needed(&WebsiteId::default())
-        .map_err(Error::WebsiteGenerationError)?;
+        .map_err(Error::WebsiteGenerationError)
+        .map_err(Box::new)?;
 
     // Generate Orangutan data files
     generate_data_files_if_needed()
-        .map_err(Error::CannotGenerateDataFiles)?;
+        .map_err(Error::CannotGenerateDataFiles)
+        .map_err(Box::new)?;
 
-    rocket::ignite()
+    rocket::build()
         .mount("/", routes![
-            get_index,
             clear_cookies,
             handle_refresh_token,
             handle_request_authenticated,
             handle_request,
             get_user_info,
         ])
-        .launch();
+        .register("/", catchers![not_found])
+        .manage(ObjectReader::new())
+        .launch()
+        .await?;
 
     Ok(())
-}
-
-#[get("/")]
-fn get_index<'a>(
-    origin: &Origin,
-    token: Option<Token>,
-) -> Response<'a> {
-    _handle_request(origin, token.map(|t| t.biscuit))
-        .unwrap_or_else(|e| e)
 }
 
 #[get("/_info")]
@@ -114,7 +108,7 @@ fn get_user_info(token: Option<Token>) -> String {
 }
 
 #[get("/clear-cookies")]
-fn clear_cookies(mut cookies: Cookies) -> &str {
+fn clear_cookies(cookies: &CookieJar<'_>) -> &'static str {
     for cookie in cookies.iter().map(Clone::clone).collect::<Vec<_>>() {
         cookies.remove(cookie.clone());
     }
@@ -123,12 +117,12 @@ fn clear_cookies(mut cookies: Cookies) -> &str {
 }
 
 #[get("/<_path..>")]
-fn handle_refresh_token<'a>(
+fn handle_refresh_token(
     _path: PathBuf,
     origin: &Origin,
-    cookies: Cookies,
+    cookies: &CookieJar<'_>,
     refreshed_token: RefreshedToken,
-) -> Response<'a> {
+) -> Redirect {
     // Save token to a Cookie if necessary
     add_cookie_if_necessary(&refreshed_token.0, cookies);
 
@@ -136,39 +130,42 @@ fn handle_refresh_token<'a>(
     let mut origin = origin.clone();
     // FIXME: Do not clear the whole query
     origin.clear_query();
-    Response::build()
-        .status(Status::Found) // 302 Found (Temporary Redirect)
-        .header(Location(origin.to_string()))
-        // Add Cache-Control and Pragma headers to prevent caching
-        .header(CacheControl(vec![CacheDirective::NoCache]))
-        .header(Pragma::NoCache)
-        .finalize()
+    Redirect::found(origin.path().to_string())
 }
 
 #[get("/<_path..>", rank = 2)]
-fn handle_request_authenticated<'a>(
+async fn handle_request_authenticated(
     _path: PathBuf,
-    origin: &Origin,
+    origin: &Origin<'_>,
     token: Token,
-    cookies: Cookies
-) -> Response<'a> {
+    cookies: &CookieJar<'_>,
+    object_reader: &State<ObjectReader>,
+) -> Result<Either<ReadObjectResponse, NotFound<()>>, object_reader::Error> {
     add_cookie_if_necessary(&token, cookies);
-    _handle_request(origin, Some(token.biscuit))
-        .unwrap_or_else(|e| e)
+    _handle_request(origin, Some(token.biscuit), object_reader).await
 }
 
 #[get("/<_path..>", rank = 3)]
-fn handle_request<'a>(_path: PathBuf, origin: &'a Origin<'a>) -> Response<'a> {
-    _handle_request(origin, None)
-        .unwrap_or_else(|e| e)
+async fn handle_request(
+    _path: PathBuf,
+    origin: &Origin<'_>,
+    object_reader: &State<ObjectReader>,
+) -> Result<Either<ReadObjectResponse, NotFound<()>>, object_reader::Error> {
+    _handle_request(origin, None, object_reader).await
 }
 
-fn _handle_request<'a>(
+#[catch(404)]
+fn not_found() -> &'static str {
+    "This page doesn't exist or you are not allowed to see it."
+}
+
+async fn _handle_request<'r>(
     origin: &Origin<'_>,
-    biscuit: Option<Biscuit>
-) -> Result<Response<'a>, Response<'a>> {
+    biscuit: Option<Biscuit>,
+    object_reader: &State<ObjectReader>,
+) -> Result<Either<ReadObjectResponse, NotFound<()>>, object_reader::Error> {
     // FIXME: Handle error
-    let path = decode(origin.path()).unwrap().into_owned();
+    let path = decode(origin.path().as_str()).unwrap().into_owned();
     trace!("GET {}", &path);
 
     let user_profiles: Vec<String> = biscuit.as_ref()
@@ -186,29 +183,22 @@ fn _handle_request<'a>(
         .unwrap_or_default();
     let website_id = WebsiteId::from(&user_profiles);
 
-    let object_reader = <dyn ObjectReader>::detect();
-
-    let stored_objects: Vec<String> = match object_reader.list_objects(&path, &website_id) {
-        Ok(o) => o,
-        Err(err) => {
+    let stored_objects: Vec<String> = object_reader.list_objects(&path, &website_id)
+        .map_err(|err| {
             error!("Error when listing objects matching '{}': {}", &path, err);
-            return Err(not_found())
-        }
-    };
+            err
+        })?;
     let Some(object_key) = matching_files(&path, &stored_objects).first().map(|o| o.to_owned()) else {
         error!("No file matching '{}' found in stored objects", &path);
-        return Err(not_found())
+        return Ok(Either::Right(NotFound(())))
     };
 
     let allowed_profiles = allowed_profiles(&object_key);
     let Some(allowed_profiles) = allowed_profiles else {
         // If allowed profiles is empty, it means it's a static file
         trace!("File <{}> did not explicitly allow profiles, serving static file", &path);
-        return object_reader.read_object(&object_key, &website_id)
-            .map(|data| {
-                Response::build().sized_body(Cursor::new(data)).finalize()
-            })
-            .ok_or(not_found());
+
+        return Ok(Either::Left(object_reader.read_object(&object_key, &website_id).await))
     };
     debug!(
         "Page <{}> can be read by {}",
@@ -240,39 +230,33 @@ fn _handle_request<'a>(
     }
     if profile.is_none() {
         debug!("No profile allowed in token");
-        return Err(not_found())
+        return Ok(Either::Right(NotFound(())))
     }
 
-    match object_reader.read_object(object_key, &website_id) {
-        Some(data) => Ok(Response::build()
-            .sized_body(Cursor::new(data))
-            .finalize()
-        ),
-        None => Err(not_found()),
-    }
+    Ok(Either::Left(object_reader.read_object(object_key, &website_id).await))
 }
 
-fn allowed_profiles<'a>(path: &String) -> Option<Vec<String>> {
+fn allowed_profiles<'r>(path: &String) -> Option<Vec<String>> {
     let path = path.rsplit_once("@").unwrap_or((path, "")).0;
     let data_file = data_file(&Path::new(path).to_path_buf());
     read_allowed(&data_file)
 }
 
-fn not_found<'a>() -> Response<'a> {
-    let object_reader = <dyn ObjectReader>::detect();
+// #[derive(Responder)]
+// #[response(status = 404)]
+// struct NotFound {
+//     inner: String,
+// }
 
-    match object_reader.read_object(&NOT_FOUND_FILE, &WebsiteId::default()) {
-        Some(data) => Response::build()
-            .sized_body(Cursor::new(data))
-            .finalize(),
-        None => Response::build()
-            .status(Status::NotFound)
-            // TODO: Re-enable Basic authentication
-            // .raw_header("WWW-Authenticate", "Basic realm=\"This page is protected. Please log in.\"")
-            .sized_body(Cursor::new("This page doesn't exist or you are not allowed to see it."))
-            .finalize(),
-    }
-}
+// impl NotFound {
+//     fn new() -> Self {
+//         // TODO: Re-enable Basic authentication
+//         // .raw_header("WWW-Authenticate", "Basic realm=\"This page is protected. Please log in.\"")
+//         NotFound {
+//             inner: "This page doesn't exist or you are not allowed to see it.".to_string(),
+//         }
+//     }
+// }
 
 struct Token {
     biscuit: Biscuit,
@@ -285,10 +269,11 @@ enum TokenError {
     // Invalid,
 }
 
-impl<'a, 'r> FromRequest<'a, 'r> for Token {
+#[rocket::async_trait]
+impl<'r> FromRequest<'r> for Token {
     type Error = TokenError;
 
-    fn from_request(request: &'a Request<'r>) -> request::Outcome<Self, Self::Error> {
+    async fn from_request(request: &'r Request<'_>) -> request::Outcome<Self, Self::Error> {
         let mut biscuit: Option<Biscuit> = None;
         let mut should_save: bool = false;
 
@@ -349,41 +334,42 @@ impl<'a, 'r> FromRequest<'a, 'r> for Token {
         }
 
         // Check query params
-        if let Some(token) = request.get_query_value::<String>(TOKEN_QUERY_PARAM_NAME).and_then(Result::ok) {
+        if let Some(token) = request.query_value::<String>(TOKEN_QUERY_PARAM_NAME).and_then(Result::ok) {
             debug!("Found token query param");
             process_token(&token, "token query param", &mut biscuit, &mut should_save);
         }
 
         match biscuit {
             Some(biscuit) => Outcome::Success(Token { biscuit, should_save }),
-            None => Outcome::Forward(()),
+            None => Outcome::Forward(Status::Unauthorized),
         }
     }
 }
 
 struct RefreshedToken(Token);
 
-impl<'a, 'r> FromRequest<'a, 'r> for RefreshedToken {
-    type Error = !;
+#[rocket::async_trait]
+impl<'r> FromRequest<'r> for RefreshedToken {
+    type Error = ();
 
-    fn from_request(request: &'a Request<'r>) -> request::Outcome<Self, Self::Error> {
-        let Some(refresh_token) = request.get_query_value::<String>(REFRESH_TOKEN_QUERY_PARAM_NAME) else {
+    async fn from_request(request: &'r Request<'_>) -> request::Outcome<Self, Self::Error> {
+        let Some(refresh_token) = request.query_value::<String>(REFRESH_TOKEN_QUERY_PARAM_NAME) else {
             debug!("Refresh token query param not found.");
-            return Outcome::Forward(())
+            return Outcome::Forward(Status::Unauthorized)
         };
         let Ok(mut refresh_token) = refresh_token else {
             debug!("Error: Refresh token query param could not be decoded as `String`.");
-            return Outcome::Forward(())
+            return Outcome::Forward(Status::Unauthorized)
         };
 
         debug!("Found refresh token query param");
 
         // If query contains `force=true`, `force` or `force=<anything>`, don't search for an existing token.
         // If instead it contains `force=false` or `force` is not present, search for a token to augment.
-        let token = if should_force_token_refresh(request.get_query_value::<bool>(FORCE_QUERY_PARAM_NAME)) {
+        let token = if should_force_token_refresh(request.query_value::<bool>(FORCE_QUERY_PARAM_NAME)) {
             None
         } else {
-            Token::from_request(request).succeeded()
+            Token::from_request(request).await.succeeded()
         };
 
         refresh_token = decode(&refresh_token).unwrap().to_string();
@@ -403,7 +389,7 @@ impl<'a, 'r> FromRequest<'a, 'r> for RefreshedToken {
                 );
                 if let Err(err) = refresh_biscuit.authorize(&authorizer) {
                     debug!("Refresh token is invalid: {}", err);
-                    return Outcome::Forward(())
+                    return Outcome::Forward(Status::Unauthorized)
                 }
 
                 trace!("Baking biscuit from refresh token");
@@ -426,38 +412,37 @@ impl<'a, 'r> FromRequest<'a, 'r> for RefreshedToken {
                                 should_save: true,
                             }))
                         } else {
-                            Outcome::Forward(())
+                            Outcome::Forward(Status::InternalServerError)
                         }
                     },
                     (_, Err(err)) => {
                         debug!("Error: Could not append block to biscuit: {}", err);
-                        Outcome::Forward(())
+                        Outcome::Forward(Status::InternalServerError)
                     },
                 }
             },
             Err(err) => {
                 debug!("Error decoding biscuit from base64: {}", err);
-                Outcome::Forward(())
+                Outcome::Forward(Status::Unauthorized)
             },
         }
     }
 }
 
-fn should_force_token_refresh(query_param_value: Option<Result<bool, &RawStr>>) -> bool {
+fn should_force_token_refresh(query_param_value: Option<Result<bool, Errors<'_>>>) -> bool {
     query_param_value.is_some_and(|v| v.unwrap_or(true))
 }
 
-fn add_cookie_if_necessary(token: &Token, mut cookies: Cookies) {
+fn add_cookie_if_necessary(token: &Token, cookies: &CookieJar<'_>) {
     if token.should_save {
         match token.biscuit.to_base64() {
             Ok(base64) => {
-                cookies.add(Cookie::build(TOKEN_COOKIE_NAME, base64)
+                cookies.add(Cookie::build((TOKEN_COOKIE_NAME, base64))
                     .path("/")
                     .max_age(Duration::days(365 * 5))
                     .http_only(true)
                     .secure(true)
-                    .same_site(SameSite::Strict)
-                    .finish());
+                    .same_site(SameSite::Strict));
             },
             Err(err) => {
                 error!("Error setting token cookie: {}", err);
@@ -525,6 +510,8 @@ impl fmt::Display for Error {
         }
     }
 }
+
+impl std::error::Error for Error {}
 
 #[cfg(test)]
 mod tests {
@@ -640,8 +627,8 @@ mod tests {
         assert_eq!(should_force_token_refresh(None), false);
         assert_eq!(should_force_token_refresh(Some(Ok(true))), true);
         assert_eq!(should_force_token_refresh(Some(Ok(false))), false);
-        assert_eq!(should_force_token_refresh(Some(Err(RawStr::from_str("yes")))), true);
-        assert_eq!(should_force_token_refresh(Some(Err(RawStr::from_str("no")))), true);
-        assert_eq!(should_force_token_refresh(Some(Err(RawStr::from_str("")))), true);
+        assert_eq!(should_force_token_refresh(Some(Err(Errors::new().with_name("yes")))), true);
+        assert_eq!(should_force_token_refresh(Some(Err(Errors::new().with_name("no")))), true);
+        assert_eq!(should_force_token_refresh(Some(Err(Errors::new().with_name("")))), true);
     }
 }

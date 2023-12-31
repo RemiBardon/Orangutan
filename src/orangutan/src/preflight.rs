@@ -1,12 +1,7 @@
-#![feature(exit_status_error)]
-
 mod config;
 mod generate;
 mod helpers;
 mod keys_reader;
-
-#[macro_use]
-extern crate lazy_static;
 
 use crate::config::*;
 use crate::generate::*;
