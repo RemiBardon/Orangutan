@@ -162,12 +162,12 @@ pub fn hugo_gen(params: Vec<&str>, destination: String) -> Result<(), Error> {
     let command = _command.args(params);
 
     trace!("Running `{:?}`…", command);
-    let status = command
-        .status()
+    let output = command
+        .output()
         .map_err(|e| Error::CannotExecuteCommand(format!("{:?}", command), e))?;
 
-    status.exit_ok()
-        .map_err(|e| Error::CommandExecutionFailed(format!("{:?}", command), e))
+    output.status.exit_ok()
+        .map_err(|e| Error::CommandExecutionFailed { command: format!("{:?}", command), error: e, stderr: output.stderr })
 }
 
 pub fn hugo(params: Vec<&str>) -> Result<Vec<u8>, Error> {
@@ -187,7 +187,7 @@ pub fn hugo(params: Vec<&str>) -> Result<Vec<u8>, Error> {
         .map_err(|e| Error::CannotExecuteCommand(format!("{:?}", command), e))?;
 
     output.status.exit_ok()
-        .map_err(|e| Error::CommandExecutionFailed(format!("{:?}", command), e))?;
+        .map_err(|e| Error::CommandExecutionFailed { command: format!("{:?}", command), error: e, stderr: output.stderr })?;
 
     Ok(output.stdout.clone())
 }
@@ -203,7 +203,7 @@ fn empty_index_json(website_dir: &PathBuf) -> Result<(), io::Error> {
 #[derive(Debug)]
 pub enum Error {
     CannotExecuteCommand(String, io::Error),
-    CommandExecutionFailed(String, ExitStatusError),
+    CommandExecutionFailed { command: String, error: ExitStatusError, stderr: Vec<u8> },
     CannotGenerateWebsite(Box<Error>),
     CannotEmptyIndexJson(io::Error),
     CannotCreateHugoConfigFile(io::Error),
@@ -213,7 +213,7 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::CannotExecuteCommand(command, err) => write!(f, "Could not execute command `{command}`: {err}"),
-            Error::CommandExecutionFailed(command, err) => write!(f, "Command `{command}` failed: {err}"),
+            Error::CommandExecutionFailed { command, error, stderr } => write!(f, "Command `{command}` failed: {error}\nstderr: {}", String::from_utf8_lossy(stderr)),
             Error::CannotGenerateWebsite(err) => write!(f, "Could not generate website: {err}"),
             Error::CannotEmptyIndexJson(err) => write!(f, "Could not empty <index.json> file: {err}"),
             Error::CannotCreateHugoConfigFile(err) => write!(f, "Could create hugo config file: {err}"),
