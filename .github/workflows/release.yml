@@ -63,7 +63,7 @@ jobs:
         run: rustup target add ${{ matrix.target }}
 
       - name: Build for ${{ matrix.target }}
-        working-directory: $SRC
+        working-directory: ./$SRC
         run: cargo build --release --bin $BIN --target ${{ matrix.target }}
 
       - name: Upload build artifacts
