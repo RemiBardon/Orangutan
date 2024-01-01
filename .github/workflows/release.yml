@@ -80,7 +80,7 @@ jobs:
 
     env:
       tag: ${{ needs.setup.outputs.tag }}
-      artifacts: $GITHUB_WORKSPACE/artifacts
+      artifacts: ${{ env.GITHUB_WORKSPACE }}/artifacts
 
     permissions:
       contents: write
@@ -89,11 +89,11 @@ jobs:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          path: $artifacts
+          path: ${{ env.artifacts }}
 
       - name: Release new version
         uses: softprops/action-gh-release@v1
         with:
           name: ${{ env.tag }}
           body: "⚠️ Changelog not yet provided."
-          files: $artifacts/*
+          files: ${{ env.artifacts }}/*
