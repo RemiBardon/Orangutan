@@ -6,6 +6,7 @@ on:
       - "v*.*.*"
 
 env:
+  SRC: src/orangutan
   BIN: orangutan-server
 
 jobs:
@@ -62,14 +63,14 @@ jobs:
         run: rustup target add ${{ matrix.target }}
 
       - name: Build for ${{ matrix.target }}
-        working-directory: src/orangutan
-        run: cargo build --release --bin $BIN --target ${{ matrix.target }}
+        working-directory: ${{ env.SRC }}
+        run: cargo build --release --bin ${{ env.BIN }} --target ${{ matrix.target }}
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: $BIN-$tag-${{ matrix.target }}
-          path: src/orangutan/target/${{ matrix.target }}/release/$BIN
+          name: ${{ env.BIN }}-${{ tag }}-${{ matrix.target }}
+          path: ${{ env.SRC }}/target/${{ matrix.target }}/release/${{ env.BIN }}
           if-no-files-found: error
 
   release:
@@ -93,6 +94,6 @@ jobs:
       - name: Release new version
         uses: softprops/action-gh-release@v1
         with:
-          name: $tag
+          name: ${{ tag }}
           body: "⚠️ Changelog not yet provided."
           files: $artifacts/*
