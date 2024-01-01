@@ -80,7 +80,7 @@ jobs:
 
     env:
       tag: ${{ needs.setup.outputs.tag }}
-      artifacts: ${{ env.GITHUB_WORKSPACE }}/artifacts
+      artifacts: ${{ github.workspace }}/artifacts
 
     permissions:
       contents: write
