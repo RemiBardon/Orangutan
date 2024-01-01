@@ -6,7 +6,6 @@ on:
       - "v*.*.*"
 
 env:
-  SRC: src/orangutan
   BIN: orangutan-server
 
 jobs:
@@ -17,9 +16,6 @@ jobs:
       tag: ${{ steps.tag.outputs.tag }}
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
       - name: Get current tag
         id: tag
         uses: devops-actions/action-get-tag@v1.0.1
@@ -66,14 +62,14 @@ jobs:
         run: rustup target add ${{ matrix.target }}
 
       - name: Build for ${{ matrix.target }}
-        working-directory: $SRC
+        working-directory: src/orangutan
         run: cargo build --release --bin $BIN --target ${{ matrix.target }}
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: $BIN-$tag-${{ matrix.target }}
-          path: $SRC/target/${{ matrix.target }}/release/$BIN
+          path: src/orangutan/target/${{ matrix.target }}/release/$BIN
           if-no-files-found: error
 
   release:
