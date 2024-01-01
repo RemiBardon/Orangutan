@@ -91,6 +91,9 @@ jobs:
         with:
           path: ${{ env.artifacts }}
 
+      - name: Display structure of downloaded files
+        run: ls -R ${{ env.artifacts }}
+
       - name: Release new version
         uses: softprops/action-gh-release@v1
         with:
