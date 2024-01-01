@@ -6,6 +6,7 @@ on:
       - "v*.*.*"
 
 env:
+  SRC: src/orangutan
   BIN: orangutan-server
 
 jobs:
@@ -62,14 +63,14 @@ jobs:
         run: rustup target add ${{ matrix.target }}
 
       - name: Build for ${{ matrix.target }}
-        working-directory: src/orangutan
+        working-directory: $SRC
         run: cargo build --release --bin $BIN --target ${{ matrix.target }}
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: $BIN-$tag-${{ matrix.target }}
-          path: src/orangutan/target/${{ matrix.target }}/release/$BIN
+          path: $SRC/target/${{ matrix.target }}/release/$BIN
           if-no-files-found: error
 
   release:
