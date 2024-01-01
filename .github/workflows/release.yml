@@ -22,7 +22,7 @@ jobs:
 
       - name: Get current tag
         id: tag
-        uses: devops-actions/action-get-tag@v1
+        uses: devops-actions/action-get-tag@v1.0.1
         with:
           strip_v: true
 
