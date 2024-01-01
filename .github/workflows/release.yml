@@ -1,0 +1,99 @@
+name: Build & release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+env:
+  SRC: src/orangutan
+  BIN: orangutan-server
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get current tag
+        id: tag
+        uses: devops-actions/action-get-tag@v1
+        with:
+          strip_v: true
+
+      - name: Install Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: Verify versions
+        run: rustc --version && rustup --version && cargo --version
+
+      - name: Cache build context
+        id: cache-cargo
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo
+
+  build:
+    runs-on: ubuntu-latest
+
+    needs: setup
+
+    strategy:
+      matrix:
+        # TODO: Centralize this data
+        target: [x86_64-unknown-linux-gnu]
+
+    env:
+      tag: ${{ needs.setup.outputs.tag }}
+
+    steps:
+      - name: Add Rust target ${{ matrix.target }}
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Build for ${{ matrix.target }}
+        working-directory: $SRC
+        run: cargo build --release --bin $BIN --target ${{ matrix.target }}
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: $BIN-$tag-${{ matrix.target }}
+          path: $SRC/target/${{ matrix.target }}/release/$BIN
+          if-no-files-found: error
+
+  release:
+    runs-on: ubuntu-latest
+
+    needs: [setup, build]
+
+    env:
+      tag: ${{ needs.setup.outputs.tag }}
+      artifacts: $GITHUB_WORKSPACE/artifacts
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: $artifacts
+
+      - name: Release new version
+        uses: softprops/action-gh-release@v1
+        with:
+          name: $tag
+          body: "⚠️ Changelog not yet provided."
+          files: $artifacts/*
