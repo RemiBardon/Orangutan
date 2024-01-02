@@ -109,7 +109,7 @@ fn _update_submodules() -> Result<(), Error> {
     let mut command = Command::new("git");
     command
         .args(vec!["-C", &WEBSITE_ROOT_PATH])
-        .args(vec!["submodule", "update", "--recursive"]);
+        .args(vec!["submodule", "update", "--remote", "--recursive"]);
 
     trace!("Running `{:?}`…", command);
     let output = command
