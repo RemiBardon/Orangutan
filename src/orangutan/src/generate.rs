@@ -1,6 +1,7 @@
 use crate::config::*;
 use crate::helpers::copy_directory;
 use core::fmt;
+use std::os::fd::FromRawFd;
 use std::sync::{Mutex, MutexGuard, Arc};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::io::Cursor;
@@ -22,6 +23,104 @@ static DATA_FILES_GENERATED: AtomicBool = AtomicBool::new(false);
 lazy_static! {
     // NOTE: `Arc` prevents race conditions
     static ref GENERATED_WEBSITES: Arc<Mutex<HashSet<PathBuf>>> = Arc::new(Mutex::new(HashSet::new()));
+}
+
+pub fn generate_default_website() -> Result<(), Error> {
+    // Generate the website
+    generate_website_if_needed(&WebsiteId::default())?;
+
+    // Generate Orangutan data files
+    generate_data_files_if_needed()?;
+
+    Ok(())
+}
+
+pub fn clone_repository() -> Result<(), Error> {
+    if WEBSITE_ROOT.is_dir() {
+        return pull_repository()
+    }
+
+    _clone_repository()?;
+    _init_submodules()?;
+    Ok(())
+}
+
+fn _clone_repository() -> Result<(), Error> {
+    let mut command = Command::new("git");
+    command
+        .args(vec!["clone", &WEBSITE_REPOSITORY, &WEBSITE_ROOT_PATH])
+        .args(vec!["--depth", "1"]);
+
+    trace!("Running `{:?}`…", command);
+    let output = command
+        .output()
+        .map_err(|e| Error::CannotExecuteCommand(format!("{:?}", command), e))?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(Error::CommandExecutionFailed { command: format!("{:?}", command), output })
+    }
+}
+
+fn _init_submodules() -> Result<(), Error> {
+    let mut command = Command::new("git");
+    command
+        .args(vec!["-C", &WEBSITE_ROOT_PATH])
+        .args(vec!["submodule", "update", "--init"]);
+
+    trace!("Running `{:?}`…", command);
+    let output = command
+        .output()
+        .map_err(|e| Error::CannotExecuteCommand(format!("{:?}", command), e))?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(Error::CommandExecutionFailed { command: format!("{:?}", command), output })
+    }
+}
+
+pub fn pull_repository() -> Result<(), Error> {
+    _pull_repository()?;
+    _update_submodules()?;
+    Ok(())
+}
+
+fn _pull_repository() -> Result<(), Error> {
+    let mut command = Command::new("git");
+    command
+        .args(vec!["-C", &WEBSITE_ROOT_PATH])
+        .arg("pull");
+
+    trace!("Running `{:?}`…", command);
+    let output = command
+        .output()
+        .map_err(|e| Error::CannotExecuteCommand(format!("{:?}", command), e))?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(Error::CommandExecutionFailed { command: format!("{:?}", command), output })
+    }
+}
+
+fn _update_submodules() -> Result<(), Error> {
+    let mut command = Command::new("git");
+    command
+        .args(vec!["-C", &WEBSITE_ROOT_PATH])
+        .args(vec!["submodule", "update", "--recursive"]);
+
+    trace!("Running `{:?}`…", command);
+    let output = command
+        .output()
+        .map_err(|e| Error::CannotExecuteCommand(format!("{:?}", command), e))?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(Error::CommandExecutionFailed { command: format!("{:?}", command), output })
+    }
 }
 
 fn _copy_hugo_config() -> Result<(), Error> {
@@ -155,7 +254,7 @@ pub fn generate_data_files_if_needed() -> Result<(), Error> {
 }
 
 pub fn hugo_gen(params: Vec<&str>, destination: String) -> Result<(), Error> {
-    let mut _command = Command::new("hugo");
+    let mut command = Command::new("hugo");
 
     let website_root = WEBSITE_ROOT.display().to_string();
     let base_params: Vec<&str> = vec![
@@ -163,7 +262,7 @@ pub fn hugo_gen(params: Vec<&str>, destination: String) -> Result<(), Error> {
         "--destination", destination.as_str(),
     ];
     let params = base_params.iter().chain(params.iter());
-    let command = _command.args(params);
+    command.args(params);
 
     trace!("Running `{:?}`…", command);
     let output = command
@@ -173,7 +272,7 @@ pub fn hugo_gen(params: Vec<&str>, destination: String) -> Result<(), Error> {
     if output.status.success() {
         Ok(())
     } else {
-        Err(Error::CommandExecutionFailed { command: format!("{:?}", command), code: output.status.code(), stderr: output.stderr })
+        Err(Error::CommandExecutionFailed { command: format!("{:?}", command), output })
     }
 }
 
@@ -194,7 +293,7 @@ pub fn hugo(params: Vec<&str>) -> Result<Vec<u8>, Error> {
         .map_err(|e| Error::CannotExecuteCommand(format!("{:?}", command), e))?;
 
     if !output.status.success() {
-        return Err(Error::CommandExecutionFailed { command: format!("{:?}", command), code: output.status.code(), stderr: output.stderr })
+        return Err(Error::CommandExecutionFailed { command: format!("{:?}", command), output })
     }
 
     Ok(output.stdout.clone())
@@ -211,7 +310,7 @@ fn empty_index_json(website_dir: &PathBuf) -> Result<(), io::Error> {
 #[derive(Debug)]
 pub enum Error {
     CannotExecuteCommand(String, io::Error),
-    CommandExecutionFailed { command: String, code: Option<i32>, stderr: Vec<u8> },
+    CommandExecutionFailed { command: String, output: std::process::Output },
     CannotGenerateWebsite(Box<Error>),
     CannotEmptyIndexJson(io::Error),
     CannotCreateHugoConfigFile(io::Error),
@@ -221,7 +320,7 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::CannotExecuteCommand(command, err) => write!(f, "Could not execute command `{command}`: {err}"),
-            Error::CommandExecutionFailed { command, code, stderr } => write!(f, "Command `{command}` failed with exit code {:?}: {}", code, String::from_utf8_lossy(stderr)),
+            Error::CommandExecutionFailed { command, output } => write!(f, "Command `{command}` failed with exit code {:?}\nstdout: {}\nstderr: {}", output.status.code(), String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr)),
             Error::CannotGenerateWebsite(err) => write!(f, "Could not generate website: {err}"),
             Error::CannotEmptyIndexJson(err) => write!(f, "Could not empty <index.json> file: {err}"),
             Error::CannotCreateHugoConfigFile(err) => write!(f, "Could create hugo config file: {err}"),

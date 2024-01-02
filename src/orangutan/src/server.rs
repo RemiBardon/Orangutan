@@ -6,19 +6,20 @@ mod object_reader;
 
 use biscuit::builder::{Fact, Term};
 use object_reader::{ObjectReader, ReadObjectResponse};
-use rocket::Either;
+use rocket::fairing::AdHoc;
+use rocket::{Either, post, Responder};
 use rocket::form::Errors;
 use rocket::http::CookieJar;
 use rocket::http::{Status, Cookie, SameSite};
 use rocket::http::uri::Origin;
-use rocket::response::status::NotFound;
+use rocket::response::status::{BadRequest, NotFound};
 use rocket::{Request, request, get, routes, catch, catchers, State};
 use rocket::response::Redirect;
 use rocket::request::FromRequest;
 use rocket::outcome::Outcome;
 use tracing::Level;
 use tracing_subscriber::FmtSubscriber;
-use std::fmt;
+use std::{fmt, fs, io};
 use std::time::SystemTime;
 use std::path::{PathBuf, Path};
 use std::process::exit;
@@ -51,7 +52,7 @@ lazy_static! {
 #[rocket::main]
 async fn main() {
     let subscriber = FmtSubscriber::builder()
-        .with_max_level(Level::DEBUG)
+        .with_max_level(Level::TRACE)
         .finish();
 
     tracing::subscriber::set_global_default(subscriber).expect("Failed to set tracing subscriber.");
@@ -68,29 +69,32 @@ async fn main() {
 }
 
 async fn throwing_main() -> Result<(), Box<dyn std::error::Error>> {
-    // Generate the website
-    generate_website_if_needed(&WebsiteId::default())
-        .map_err(Error::WebsiteGenerationError)
-        .map_err(Box::new)?;
-
-    // Generate Orangutan data files
-    generate_data_files_if_needed()
-        .map_err(Error::CannotGenerateDataFiles)
-        .map_err(Box::new)?;
-
-    rocket::build()
+    let rocket = rocket::build()
         .mount("/", routes![
             clear_cookies,
             handle_refresh_token,
             handle_request_authenticated,
             handle_request,
             get_user_info,
+            update_content_github,
         ])
         .register("/", catchers![not_found])
         .manage(ObjectReader::new())
+        .attach(AdHoc::on_liftoff("Liftoff website generation", |rocket| Box::pin(async move {
+            if let Err(err) = liftoff() {
+                error!("Error: {}", err);
+                rocket.shutdown().await;
+            }
+        })))
         .launch()
         .await?;
 
+    Ok(())
+}
+
+fn liftoff() -> Result<(), Error> {
+    clone_repository().map_err(Error::WebsiteGenerationError)?;
+    generate_default_website().map_err(Error::WebsiteGenerationError)?;
     Ok(())
 }
 
@@ -152,6 +156,31 @@ async fn handle_request(
     object_reader: &State<ObjectReader>,
 ) -> Result<Either<ReadObjectResponse, NotFound<()>>, object_reader::Error> {
     _handle_request(origin, None, object_reader).await
+}
+
+/// TODO: [Validate webhook deliveries](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries#validating-webhook-deliveries)
+#[post("/update-content/github")]
+fn update_content_github() -> Result<(), Error> {
+    // Update repository
+    pull_repository()
+        .map_err(Error::CannotPullOutdatedRepository)?;
+
+    // Remove outdated websites
+    fs::remove_dir_all(DEST_DIR.as_path())
+        .map_err(Error::CannotDeleteOutdatedWebsites)?;
+
+    // Pre-generate default website as we will access it at some point anyway
+    generate_default_website()
+        .map_err(Error::WebsiteGenerationError)?;
+
+    Ok(())
+}
+
+#[post("/update-content/<source>")]
+fn update_content_other(
+    source: &str,
+) -> BadRequest<String> {
+    BadRequest(format!("Source '{source}' is not supported."))
 }
 
 #[catch(404)]
@@ -496,17 +525,20 @@ fn add_padding(base64_string: &str) -> String {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Responder)]
+#[response(status = 500)]
 enum Error {
     WebsiteGenerationError(generate::Error),
-    CannotGenerateDataFiles(generate::Error),
+    CannotPullOutdatedRepository(generate::Error),
+    CannotDeleteOutdatedWebsites(io::Error),
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::WebsiteGenerationError(err) => write!(f, "Website generation error: {err}"),
-            Error::CannotGenerateDataFiles(err) => write!(f, "Could not generate data files: {err}"),
+            Error::CannotPullOutdatedRepository(err) => write!(f, "Cannot pull outdated repository: {err}"),
+            Error::CannotDeleteOutdatedWebsites(err) => write!(f, "Cannot delete outdated websites: {err}"),
         }
     }
 }
