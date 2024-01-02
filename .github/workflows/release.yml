@@ -79,7 +79,7 @@ jobs:
     needs: [setup, build]
 
     env:
-      tag: ${{ needs.setup.outputs.tag }}
+      #tag: ${{ needs.setup.outputs.tag }}
       artifacts: ${{ github.workspace }}/artifacts
 
     permissions:
@@ -95,8 +95,10 @@ jobs:
         run: ls -R ${{ env.artifacts }}
 
       - name: Release new version
-        uses: softprops/action-gh-release@v1
+        uses: ncipollo/release-action@v1
         with:
-          name: ${{ env.tag }}
-          body: "⚠️ Changelog not yet provided."
-          files: ${{ env.artifacts }}/*
+          #name: ${{ env.tag }}
+          #body: "⚠️ Changelog not yet provided."
+          generateReleaseNotes: true
+          artifactErrorsFailBuild: true
+          artifacts: ${{ env.artifacts }}/*
