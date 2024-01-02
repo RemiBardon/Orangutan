@@ -92,7 +92,8 @@ jobs:
           path: ${{ env.artifacts }}
 
       - name: Archive artifacts
-        run: for f in '${{ env.artifacts }}'/*; do tar -zcvf "$f".tar.gz "$f"; done
+        working-directory: ${{ env.artifacts }}
+        run: for f in *; do tar -zcvf "$f".tar.gz "$f"; done
 
       - name: Release new version
         uses: ncipollo/release-action@v1
