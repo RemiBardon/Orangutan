@@ -48,7 +48,7 @@ pub fn clone_repository() -> Result<(), Error> {
 fn _clone_repository() -> Result<(), Error> {
     let mut command = Command::new("git");
     command
-        .args(vec!["clone", &WEBSITE_REPOSITORY, &WEBSITE_ROOT_PATH])
+        .args(vec!["clone", &WEBSITE_REPOSITORY, &WEBSITE_ROOT.display().to_string()])
         .args(vec!["--depth", "1"]);
 
     trace!("Running `{:?}`…", command);
@@ -66,7 +66,7 @@ fn _clone_repository() -> Result<(), Error> {
 fn _init_submodules() -> Result<(), Error> {
     let mut command = Command::new("git");
     command
-        .args(vec!["-C", &WEBSITE_ROOT_PATH])
+        .args(vec!["-C", &WEBSITE_ROOT.display().to_string()])
         .args(vec!["submodule", "update", "--init"]);
 
     trace!("Running `{:?}`…", command);
@@ -90,7 +90,7 @@ pub fn pull_repository() -> Result<(), Error> {
 fn _pull_repository() -> Result<(), Error> {
     let mut command = Command::new("git");
     command
-        .args(vec!["-C", &WEBSITE_ROOT_PATH])
+        .args(vec!["-C", &WEBSITE_ROOT.display().to_string()])
         .arg("pull");
 
     trace!("Running `{:?}`…", command);
@@ -108,7 +108,7 @@ fn _pull_repository() -> Result<(), Error> {
 fn _update_submodules() -> Result<(), Error> {
     let mut command = Command::new("git");
     command
-        .args(vec!["-C", &WEBSITE_ROOT_PATH])
+        .args(vec!["-C", &WEBSITE_ROOT.display().to_string()])
         .args(vec!["submodule", "update", "--remote", "--recursive"]);
 
     trace!("Running `{:?}`…", command);

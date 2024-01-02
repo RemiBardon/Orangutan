@@ -21,9 +21,8 @@ const WEBSITE_DIR_NAME: &'static str = "website";
 lazy_static! {
     static ref WORK_DIR: PathBuf = env::current_dir().unwrap();
     pub static ref WEBSITE_REPOSITORY: String = env::var("WEBSITE_REPOSITORY").expect("Environment variable `WEBSITE_REPOSITORY` is required.");
-    pub static ref WEBSITE_ROOT_PATH: String = env::var("WEBSITE_ROOT").unwrap_or("website".to_string());
-    pub static ref WEBSITE_ROOT: &'static Path = Path::new(WEBSITE_ROOT_PATH.as_str());
     pub static ref BASE_DIR: PathBuf = WORK_DIR.join(".orangutan");
+    pub static ref WEBSITE_ROOT: PathBuf = BASE_DIR.join("website");
     pub static ref KEYS_DIR: PathBuf = BASE_DIR.join("keys");
     pub static ref HUGO_CONFIG_DIR: PathBuf = BASE_DIR.join("hugo-config");
     pub static ref DEST_DIR: PathBuf = BASE_DIR.join("out");
