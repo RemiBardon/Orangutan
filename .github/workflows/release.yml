@@ -91,8 +91,8 @@ jobs:
         with:
           path: ${{ env.artifacts }}
 
-      - name: Display structure of downloaded files
-        run: ls -R ${{ env.artifacts }}
+      - name: Archive artifacts
+        run: for f in '${{ env.artifacts }}'/*; do tar -zcvf "$f".tar.gz "$f"; done
 
       - name: Release new version
         uses: ncipollo/release-action@v1
@@ -101,4 +101,4 @@ jobs:
           #body: "⚠️ Changelog not yet provided."
           generateReleaseNotes: true
           artifactErrorsFailBuild: true
-          artifacts: ${{ env.artifacts }}/*
+          artifacts: ${{ env.artifacts }}/*.tar.gz
