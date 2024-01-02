@@ -84,6 +84,7 @@ async fn throwing_main() -> Result<(), Box<dyn std::error::Error>> {
             if let Err(err) = liftoff() {
                 error!("Error: {}", err);
                 rocket.shutdown().await;
+                exit(1);
             }
         })))
         .launch()
