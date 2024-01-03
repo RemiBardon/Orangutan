@@ -1,6 +1,7 @@
 use crate::config::*;
 use crate::helpers::copy_directory;
 use core::fmt;
+use std::borrow::BorrowMut;
 use std::os::fd::FromRawFd;
 use std::sync::{Mutex, MutexGuard, Arc};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -14,7 +15,7 @@ use std::env;
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::{Command, Stdio, Output};
 use tracing::{info, debug, trace};
 
 static HUGO_CONFIG_GENERATED: AtomicBool = AtomicBool::new(false);
@@ -52,14 +53,14 @@ fn _clone_repository() -> Result<(), Error> {
         .args(vec!["--depth", "1"]);
 
     trace!("Running `{:?}`…", command);
-    let output = command
-        .output()
+    let status = command
+        .status()
         .map_err(|e| Error::CannotExecuteCommand(format!("{:?}", command), e))?;
 
-    if output.status.success() {
+    if status.success() {
         Ok(())
     } else {
-        Err(Error::CommandExecutionFailed { command: format!("{:?}", command), output })
+        Err(Error::CommandExecutionFailed { command: format!("{:?}", command), code: status.code() })
     }
 }
 
@@ -70,14 +71,14 @@ fn _init_submodules() -> Result<(), Error> {
         .args(vec!["submodule", "update", "--init"]);
 
     trace!("Running `{:?}`…", command);
-    let output = command
-        .output()
+    let status = command
+        .status()
         .map_err(|e| Error::CannotExecuteCommand(format!("{:?}", command), e))?;
 
-    if output.status.success() {
+    if status.success() {
         Ok(())
     } else {
-        Err(Error::CommandExecutionFailed { command: format!("{:?}", command), output })
+        Err(Error::CommandExecutionFailed { command: format!("{:?}", command), code: status.code() })
     }
 }
 
@@ -94,14 +95,14 @@ fn _pull_repository() -> Result<(), Error> {
         .arg("pull");
 
     trace!("Running `{:?}`…", command);
-    let output = command
-        .output()
+    let status = command
+        .status()
         .map_err(|e| Error::CannotExecuteCommand(format!("{:?}", command), e))?;
 
-    if output.status.success() {
+    if status.success() {
         Ok(())
     } else {
-        Err(Error::CommandExecutionFailed { command: format!("{:?}", command), output })
+        Err(Error::CommandExecutionFailed { command: format!("{:?}", command), code: status.code() })
     }
 }
 
@@ -112,14 +113,16 @@ fn _update_submodules() -> Result<(), Error> {
         .args(vec!["submodule", "update", "--remote", "--recursive"]);
 
     trace!("Running `{:?}`…", command);
-    let output = command
-        .output()
+    let status = command
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
         .map_err(|e| Error::CannotExecuteCommand(format!("{:?}", command), e))?;
 
-    if output.status.success() {
+    if status.success() {
         Ok(())
     } else {
-        Err(Error::CommandExecutionFailed { command: format!("{:?}", command), output })
+        Err(Error::CommandExecutionFailed { command: format!("{:?}", command), code: status.code() })
     }
 }
 
@@ -133,7 +136,7 @@ fn _copy_hugo_config() -> Result<(), Error> {
     debug!("Hugo config will be saved in <{}>", &config_dir.display());
 
     // Read current config
-    let base_config = hugo(vec!["config"])?;
+    let base_config = hugo(vec!["config"], true)?.stdout;
 
     // Write new config file
     let config_file = config_dir.join("hugo.toml");
@@ -254,15 +257,32 @@ pub fn generate_data_files_if_needed() -> Result<(), Error> {
 }
 
 pub fn hugo_gen(params: Vec<&str>, destination: String) -> Result<(), Error> {
-    let mut command = Command::new("hugo");
-
     let website_root = WEBSITE_ROOT.display().to_string();
     let base_params: Vec<&str> = vec![
         "--source", website_root.as_str(),
         "--destination", destination.as_str(),
     ];
+    hugo(base_params.into_iter().chain(params.into_iter()).collect(), false)?;
+
+    Ok(())
+}
+
+fn hugo(params: Vec<&str>, pipe_stdout: bool) -> Result<Output, Error> {
+    let mut command = Command::new("hugo");
+
+    let website_root = WEBSITE_ROOT.display().to_string();
+    let base_params: Vec<&str> = vec![
+        "--source", website_root.as_str(),
+    ];
     let params = base_params.iter().chain(params.iter());
     command.args(params);
+
+    // `Stdio::piped()` is the default when using `.output()`,
+    // so we must override it the other way around
+    command.stderr(Stdio::inherit());
+    if !pipe_stdout {
+        command.stdout(Stdio::inherit());
+    }
 
     trace!("Running `{:?}`…", command);
     let output = command
@@ -270,33 +290,10 @@ pub fn hugo_gen(params: Vec<&str>, destination: String) -> Result<(), Error> {
         .map_err(|e| Error::CannotExecuteCommand(format!("{:?}", command), e))?;
 
     if output.status.success() {
-        Ok(())
+        Ok(output.clone())
     } else {
-        Err(Error::CommandExecutionFailed { command: format!("{:?}", command), output })
+        Err(Error::CommandExecutionFailed { command: format!("{:?}", command), code: output.status.code() })
     }
-}
-
-pub fn hugo(params: Vec<&str>) -> Result<Vec<u8>, Error> {
-    let mut _command = Command::new("hugo");
-
-    let website_root = WEBSITE_ROOT.display().to_string();
-    let base_params: Vec<&str> = vec![
-        "--source", website_root.as_str(),
-    ];
-    let params = base_params.iter().chain(params.iter());
-    let command = _command.args(params);
-
-    trace!("Running `{:?}`…", command);
-    let output = command
-        .stdout(Stdio::piped())
-        .output()
-        .map_err(|e| Error::CannotExecuteCommand(format!("{:?}", command), e))?;
-
-    if !output.status.success() {
-        return Err(Error::CommandExecutionFailed { command: format!("{:?}", command), output })
-    }
-
-    Ok(output.stdout.clone())
 }
 
 fn empty_index_json(website_dir: &PathBuf) -> Result<(), io::Error> {
@@ -310,7 +307,7 @@ fn empty_index_json(website_dir: &PathBuf) -> Result<(), io::Error> {
 #[derive(Debug)]
 pub enum Error {
     CannotExecuteCommand(String, io::Error),
-    CommandExecutionFailed { command: String, output: std::process::Output },
+    CommandExecutionFailed { command: String, code: Option<i32> },
     CannotGenerateWebsite(Box<Error>),
     CannotEmptyIndexJson(io::Error),
     CannotCreateHugoConfigFile(io::Error),
@@ -320,7 +317,7 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::CannotExecuteCommand(command, err) => write!(f, "Could not execute command `{command}`: {err}"),
-            Error::CommandExecutionFailed { command, output } => write!(f, "Command `{command}` failed with exit code {:?}\nstdout: {}\nstderr: {}", output.status.code(), String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr)),
+            Error::CommandExecutionFailed { command, code } => write!(f, "Command `{command}` failed with exit code {:?}", code),
             Error::CannotGenerateWebsite(err) => write!(f, "Could not generate website: {err}"),
             Error::CannotEmptyIndexJson(err) => write!(f, "Could not empty <index.json> file: {err}"),
             Error::CannotCreateHugoConfigFile(err) => write!(f, "Could create hugo config file: {err}"),
