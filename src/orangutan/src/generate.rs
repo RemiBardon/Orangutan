@@ -1,22 +1,23 @@
-use crate::config::*;
-use crate::helpers::copy_directory;
 use core::fmt;
 use std::borrow::BorrowMut;
-use std::os::fd::FromRawFd;
-use std::sync::{Mutex, MutexGuard, Arc};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::io::Cursor;
-use rocket::request::Request;
-use rocket::response::{self, Response, Responder};
-use rocket::http::ContentType;
-use lazy_static::lazy_static;
 use std::collections::HashSet;
 use std::env;
 use std::fs::{self, File};
-use std::io::{self, Write};
+use std::io::{self, Cursor, Write};
+use std::os::fd::FromRawFd;
 use std::path::PathBuf;
-use std::process::{Command, Stdio, Output};
-use tracing::{info, debug, trace};
+use std::process::{Command, Output, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
+
+use lazy_static::lazy_static;
+use rocket::http::ContentType;
+use rocket::request::Request;
+use rocket::response::{self, Responder, Response};
+use tracing::{debug, info, trace};
+
+use crate::config::*;
+use crate::helpers::copy_directory;
 
 static HUGO_CONFIG_GENERATED: AtomicBool = AtomicBool::new(false);
 static DATA_FILES_GENERATED: AtomicBool = AtomicBool::new(false);
@@ -38,7 +39,7 @@ pub fn generate_default_website() -> Result<(), Error> {
 
 pub fn clone_repository() -> Result<(), Error> {
     if WEBSITE_ROOT.is_dir() {
-        return pull_repository()
+        return pull_repository();
     }
 
     _clone_repository()?;
@@ -49,7 +50,11 @@ pub fn clone_repository() -> Result<(), Error> {
 fn _clone_repository() -> Result<(), Error> {
     let mut command = Command::new("git");
     command
-        .args(vec!["clone", &WEBSITE_REPOSITORY, &WEBSITE_ROOT.display().to_string()])
+        .args(vec![
+            "clone",
+            &WEBSITE_REPOSITORY,
+            &WEBSITE_ROOT.display().to_string(),
+        ])
         .args(vec!["--depth", "1"]);
 
     trace!("Running `{:?}`…", command);
@@ -60,7 +65,10 @@ fn _clone_repository() -> Result<(), Error> {
     if status.success() {
         Ok(())
     } else {
-        Err(Error::CommandExecutionFailed { command: format!("{:?}", command), code: status.code() })
+        Err(Error::CommandExecutionFailed {
+            command: format!("{:?}", command),
+            code: status.code(),
+        })
     }
 }
 
@@ -78,7 +86,10 @@ fn _init_submodules() -> Result<(), Error> {
     if status.success() {
         Ok(())
     } else {
-        Err(Error::CommandExecutionFailed { command: format!("{:?}", command), code: status.code() })
+        Err(Error::CommandExecutionFailed {
+            command: format!("{:?}", command),
+            code: status.code(),
+        })
     }
 }
 
@@ -102,7 +113,10 @@ fn _pull_repository() -> Result<(), Error> {
     if status.success() {
         Ok(())
     } else {
-        Err(Error::CommandExecutionFailed { command: format!("{:?}", command), code: status.code() })
+        Err(Error::CommandExecutionFailed {
+            command: format!("{:?}", command),
+            code: status.code(),
+        })
     }
 }
 
@@ -122,7 +136,10 @@ fn _update_submodules() -> Result<(), Error> {
     if status.success() {
         Ok(())
     } else {
-        Err(Error::CommandExecutionFailed { command: format!("{:?}", command), code: status.code() })
+        Err(Error::CommandExecutionFailed {
+            command: format!("{:?}", command),
+            code: status.code(),
+        })
     }
 }
 
@@ -131,8 +148,7 @@ fn _copy_hugo_config() -> Result<(), Error> {
 
     // Create config dir
     let config_dir = HUGO_CONFIG_DIR.join("_default");
-    fs::create_dir_all(&config_dir)
-        .map_err(Error::CannotCreateHugoConfigFile)?;
+    fs::create_dir_all(&config_dir).map_err(Error::CannotCreateHugoConfigFile)?;
     debug!("Hugo config will be saved in <{}>", &config_dir.display());
 
     // Read current config
@@ -153,15 +169,17 @@ fn _copy_hugo_config() -> Result<(), Error> {
 fn gen_hugo_config(website_id: &WebsiteId) -> Result<(), Error> {
     // Create config dir
     let config_dir = HUGO_CONFIG_DIR.join(website_id.dir_name());
-    fs::create_dir_all(&config_dir)
-        .map_err(Error::CannotCreateHugoConfigFile)?;
+    fs::create_dir_all(&config_dir).map_err(Error::CannotCreateHugoConfigFile)?;
 
     // Create new config
     let profiles: Vec<String> = website_id.profiles.iter().map(|s| s.clone()).collect();
     let profiles_json = serde_json::to_string(&profiles).unwrap();
-    let config = format!("[Params]
+    let config = format!(
+        "[Params]
   currentProfiles = {}
-", profiles_json);
+",
+        profiles_json
+    );
 
     // Write new config file
     let config_file = config_dir.join("hugo.toml");
@@ -184,10 +202,14 @@ fn copy_hugo_config_if_needed() -> Result<(), Error> {
 fn generate_website(
     id: &WebsiteId,
     destination: &PathBuf,
-    generated_websites: &mut MutexGuard<'_, HashSet<PathBuf>>
+    generated_websites: &mut MutexGuard<'_, HashSet<PathBuf>>,
 ) -> Result<(), Error> {
     info!("Generating website for {:?}…", id.profiles);
-    debug!("Website for {:?} will be generated at <{}>", id.profiles, destination.display());
+    debug!(
+        "Website for {:?} will be generated at <{}>",
+        id.profiles,
+        destination.display()
+    );
 
     copy_hugo_config_if_needed()?;
     gen_hugo_config(id)?;
@@ -195,10 +217,13 @@ fn generate_website(
     let config_dir = HUGO_CONFIG_DIR.display().to_string();
     let environment = id.dir_name();
     let mut params = vec![
-        "--disableKinds", "RSS,sitemap",
+        "--disableKinds",
+        "RSS,sitemap",
         "--cleanDestinationDir",
-        "--configDir", &config_dir,
-        "--environment", &environment,
+        "--configDir",
+        &config_dir,
+        "--environment",
+        &environment,
     ];
     if env::var("LOCALHOST") == Ok("true".to_string()) {
         params.append(&mut vec!["--baseURL", "http://localhost:8080"]);
@@ -235,12 +260,21 @@ fn _generate_data_files() -> Result<(), Error> {
     let shortcodes_dir = WEBSITE_ROOT.join("themes/PaperMod/layouts/shortcodes");
     let shortcodes_dest_dir_path = format!("themes/{}/layouts/shortcodes", THEME_NAME);
     let shortcodes_dest_dir = WEBSITE_ROOT.join(&shortcodes_dest_dir_path);
-    trace!("Copying shortcodes from {} to {}…", shortcodes_dir.display(), shortcodes_dest_dir.display());
+    trace!(
+        "Copying shortcodes from {} to {}…",
+        shortcodes_dir.display(),
+        shortcodes_dest_dir.display()
+    );
     copy_directory(&shortcodes_dir, &shortcodes_dest_dir).unwrap();
 
     let res = hugo_gen(
-        vec!["--disableKinds", "RSS,sitemap,home", "--theme", THEME_NAME],
-        WEBSITE_DATA_DIR.display().to_string()
+        vec![
+            "--disableKinds",
+            "RSS,sitemap,home",
+            "--theme",
+            THEME_NAME,
+        ],
+        WEBSITE_DATA_DIR.display().to_string(),
     )?;
 
     DATA_FILES_GENERATED.store(true, Ordering::Relaxed);
@@ -256,24 +290,33 @@ pub fn generate_data_files_if_needed() -> Result<(), Error> {
     }
 }
 
-pub fn hugo_gen(params: Vec<&str>, destination: String) -> Result<(), Error> {
+pub fn hugo_gen(
+    params: Vec<&str>,
+    destination: String,
+) -> Result<(), Error> {
     let website_root = WEBSITE_ROOT.display().to_string();
     let base_params: Vec<&str> = vec![
-        "--source", website_root.as_str(),
-        "--destination", destination.as_str(),
+        "--source",
+        website_root.as_str(),
+        "--destination",
+        destination.as_str(),
     ];
-    hugo(base_params.into_iter().chain(params.into_iter()).collect(), false)?;
+    hugo(
+        base_params.into_iter().chain(params.into_iter()).collect(),
+        false,
+    )?;
 
     Ok(())
 }
 
-fn hugo(params: Vec<&str>, pipe_stdout: bool) -> Result<Output, Error> {
+fn hugo(
+    params: Vec<&str>,
+    pipe_stdout: bool,
+) -> Result<Output, Error> {
     let mut command = Command::new("hugo");
 
     let website_root = WEBSITE_ROOT.display().to_string();
-    let base_params: Vec<&str> = vec![
-        "--source", website_root.as_str(),
-    ];
+    let base_params: Vec<&str> = vec!["--source", website_root.as_str()];
     let params = base_params.iter().chain(params.iter());
     command.args(params);
 
@@ -292,7 +335,10 @@ fn hugo(params: Vec<&str>, pipe_stdout: bool) -> Result<Output, Error> {
     if output.status.success() {
         Ok(output.clone())
     } else {
-        Err(Error::CommandExecutionFailed { command: format!("{:?}", command), code: output.status.code() })
+        Err(Error::CommandExecutionFailed {
+            command: format!("{:?}", command),
+            code: output.status.code(),
+        })
     }
 }
 
@@ -314,20 +360,34 @@ pub enum Error {
 }
 
 impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         match self {
-            Error::CannotExecuteCommand(command, err) => write!(f, "Could not execute command `{command}`: {err}"),
-            Error::CommandExecutionFailed { command, code } => write!(f, "Command `{command}` failed with exit code {:?}", code),
+            Error::CannotExecuteCommand(command, err) => {
+                write!(f, "Could not execute command `{command}`: {err}")
+            },
+            Error::CommandExecutionFailed { command, code } => {
+                write!(f, "Command `{command}` failed with exit code {:?}", code)
+            },
             Error::CannotGenerateWebsite(err) => write!(f, "Could not generate website: {err}"),
-            Error::CannotEmptyIndexJson(err) => write!(f, "Could not empty <index.json> file: {err}"),
-            Error::CannotCreateHugoConfigFile(err) => write!(f, "Could create hugo config file: {err}"),
+            Error::CannotEmptyIndexJson(err) => {
+                write!(f, "Could not empty <index.json> file: {err}")
+            },
+            Error::CannotCreateHugoConfigFile(err) => {
+                write!(f, "Could create hugo config file: {err}")
+            },
         }
     }
 }
 
 #[rocket::async_trait]
 impl<'r> Responder<'r, 'static> for Error {
-    fn respond_to(self, _: &'r Request<'_>) -> response::Result<'static> {
+    fn respond_to(
+        self,
+        _: &'r Request<'_>,
+    ) -> response::Result<'static> {
         let res = self.to_string();
         Response::build()
             .header(ContentType::Plain)

@@ -1,0 +1,6 @@
+array_width = 48
+fn_params_layout = "Vertical"
+group_imports = "StdExternalCrate"
+imports_granularity = "Module"
+match_block_trailing_comma = true
+overflow_delimited_expr = true

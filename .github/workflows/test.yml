@@ -39,8 +39,7 @@ jobs:
         working-directory: ./src/orangutan
         run: cargo test
 
-      # TODO: Re-enable style checking
-      # # TODO: Only check code style for one target
-      # - name: Check code style
-      #   working-directory: ./src/orangutan
-      #   run: cargo fmt -- --check
+      # TODO: Only check code style for one target
+      - name: Check code style
+        working-directory: ./src/orangutan
+        run: cargo fmt -- --check

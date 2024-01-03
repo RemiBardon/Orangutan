@@ -1,8 +1,12 @@
-use std::{path::{PathBuf, Path}, collections::HashSet, fs::{self, File}, io, sync::Mutex};
+use std::collections::HashSet;
+use std::fs::{self, File};
+use std::io;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use lazy_static::lazy_static;
 use serde_json::{self, Value};
-use tracing::{trace, debug, error};
+use tracing::{debug, error, trace};
 
 use crate::config::*;
 
@@ -14,7 +18,7 @@ pub fn used_profiles<'a>() -> &'a HashSet<String> {
     let mut used_profiles = USED_PROFILES.lock().unwrap();
     if let Some(profiles) = used_profiles.clone() {
         trace!("Read used profiles from cache");
-        return profiles
+        return profiles;
     }
 
     debug!("Reading used profiles…");
@@ -31,7 +35,9 @@ pub fn used_profiles<'a>() -> &'a HashSet<String> {
         debug!("  read_allowed: {:?}", read_allowed);
 
         // Store new profiles
-        read_allowed.iter().for_each(|p| { acc.insert(p.clone()); });
+        read_allowed.iter().for_each(|p| {
+            acc.insert(p.clone());
+        });
     }
 
     *used_profiles = Some(acc);
@@ -39,12 +45,20 @@ pub fn used_profiles<'a>() -> &'a HashSet<String> {
     acc
 }
 
-pub fn find(dir: &PathBuf, extensions: &Vec<&str>, files: &mut Vec<PathBuf>) {
+pub fn find(
+    dir: &PathBuf,
+    extensions: &Vec<&str>,
+    files: &mut Vec<PathBuf>,
+) {
     for entry in fs::read_dir(dir).unwrap() {
         if let Ok(entry) = entry {
             let path = entry.path();
             if path.is_file() {
-                if path.extension().map(|ext| extensions.contains(&ext.to_str().unwrap())).unwrap_or(false) {
+                if path
+                    .extension()
+                    .map(|ext| extensions.contains(&ext.to_str().unwrap()))
+                    .unwrap_or(false)
+                {
                     files.push(path);
                 }
             } else if path.is_dir() {
@@ -95,7 +109,11 @@ pub fn data_file(html_file: &PathBuf) -> PathBuf {
 
 fn find_data_files() -> Vec<PathBuf> {
     let mut data_files: Vec<PathBuf> = Vec::new();
-    find(&WEBSITE_DATA_DIR, &vec![DATA_FILE_EXTENSION], &mut data_files);
+    find(
+        &WEBSITE_DATA_DIR,
+        &vec![DATA_FILE_EXTENSION],
+        &mut data_files,
+    );
     data_files
 }
 
@@ -114,21 +132,26 @@ fn _read_allowed(data_file: &PathBuf) -> Option<Option<Vec<String>>> {
 
 // `None` if file not found
 pub fn read_allowed(data_file: &PathBuf) -> Option<Vec<String>> {
-    _read_allowed(data_file)
-        .map(|o| o.unwrap_or(vec![DEFAULT_PROFILE.to_string()]))
+    _read_allowed(data_file).map(|o| o.unwrap_or(vec![DEFAULT_PROFILE.to_string()]))
 }
 
-pub fn object_key<P: AsRef<Path>>(path: &P, profile: &str) -> String {
+pub fn object_key<P: AsRef<Path>>(
+    path: &P,
+    profile: &str,
+) -> String {
     let path = path.as_ref();
     if let Some(ext) = path.extension() {
         if SUFFIXED_EXTENSIONS.contains(&ext.to_str().unwrap()) {
-            return format!("{}@{}", path.display(), profile)
+            return format!("{}@{}", path.display(), profile);
         }
     }
     path.display().to_string()
 }
 
-pub fn copy_directory(src: &std::path::Path, dest: &std::path::Path) -> io::Result<()> {
+pub fn copy_directory(
+    src: &std::path::Path,
+    dest: &std::path::Path,
+) -> io::Result<()> {
     if src.is_file() {
         // If the source is a file, copy it to the destination
         fs::copy(src, dest)?;

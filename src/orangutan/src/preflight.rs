@@ -3,13 +3,15 @@ mod generate;
 mod helpers;
 mod keys_reader;
 
+use core::fmt;
+use std::process::exit;
+
+use tracing::{debug, error, Level};
+use tracing_subscriber::FmtSubscriber;
+
 use crate::config::*;
 use crate::generate::*;
 use crate::helpers::*;
-use core::fmt;
-use std::process::exit;
-use tracing_subscriber::FmtSubscriber;
-use tracing::{Level, debug, error};
 
 fn main() {
     let subscriber = FmtSubscriber::builder()
@@ -26,12 +28,10 @@ fn main() {
 
 pub fn throwing_main() -> Result<(), Error> {
     // Generate the website
-    generate_website_if_needed(&WebsiteId::default())
-        .map_err(Error::WebsiteGenerationError)?;
+    generate_website_if_needed(&WebsiteId::default()).map_err(Error::WebsiteGenerationError)?;
 
     // Generate Orangutan data files
-    generate_data_files_if_needed()
-        .map_err(Error::CannotGenerateDataFiles)?;
+    generate_data_files_if_needed().map_err(Error::CannotGenerateDataFiles)?;
 
     // Read all profiles just for debug purposes
     let used_profiles = used_profiles();
@@ -56,10 +56,15 @@ pub enum Error {
 }
 
 impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         match self {
             Error::WebsiteGenerationError(err) => write!(f, "Website generation error: {err}"),
-            Error::CannotGenerateDataFiles(err) => write!(f, "Could not generate data files: {err}"),
+            Error::CannotGenerateDataFiles(err) => {
+                write!(f, "Could not generate data files: {err}")
+            },
         }
     }
 }

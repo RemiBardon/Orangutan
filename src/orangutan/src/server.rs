@@ -4,31 +4,29 @@ mod helpers;
 mod keys_reader;
 mod object_reader;
 
+use std::path::{Path, PathBuf};
+use std::process::exit;
+use std::time::SystemTime;
+use std::{fmt, fs, io};
+
 use biscuit::builder::{Fact, Term};
+use biscuit::macros::authorizer;
+use biscuit::Biscuit;
+use biscuit_auth as biscuit;
+use lazy_static::lazy_static;
 use object_reader::{ObjectReader, ReadObjectResponse};
 use rocket::fairing::AdHoc;
-use rocket::{Either, post, Responder};
 use rocket::form::Errors;
-use rocket::http::CookieJar;
-use rocket::http::{Status, Cookie, SameSite};
 use rocket::http::uri::Origin;
-use rocket::response::status::{BadRequest, NotFound};
-use rocket::{Request, request, get, routes, catch, catchers, State};
-use rocket::response::Redirect;
-use rocket::request::FromRequest;
+use rocket::http::{Cookie, CookieJar, SameSite, Status};
 use rocket::outcome::Outcome;
-use tracing::Level;
-use tracing_subscriber::FmtSubscriber;
-use std::{fmt, fs, io};
-use std::time::SystemTime;
-use std::path::{PathBuf, Path};
-use std::process::exit;
-use tracing::{debug, error, trace};
+use rocket::request::FromRequest;
+use rocket::response::status::{BadRequest, NotFound};
+use rocket::response::Redirect;
+use rocket::{catch, catchers, get, post, request, routes, Either, Request, Responder, State};
 use time::Duration;
-use lazy_static::lazy_static;
-use biscuit_auth as biscuit;
-use biscuit::Biscuit;
-use biscuit::macros::authorizer;
+use tracing::{debug, error, trace, Level};
+use tracing_subscriber::FmtSubscriber;
 use urlencoding::decode;
 
 use crate::config::*;
@@ -44,7 +42,7 @@ lazy_static! {
             Err(err) => {
                 error!("Error generating root Biscuit key: {}", err);
                 exit(1);
-            }
+            },
         }
     };
 }
@@ -80,12 +78,14 @@ async fn throwing_main() -> Result<(), Box<dyn std::error::Error>> {
         ])
         .register("/", catchers![not_found])
         .manage(ObjectReader::new())
-        .attach(AdHoc::on_liftoff("Liftoff website generation", |rocket| Box::pin(async move {
-            if let Err(err) = liftoff() {
-                error!("Error: {}", err);
-                rocket.shutdown().notify();
-            }
-        })))
+        .attach(AdHoc::on_liftoff("Liftoff website generation", |rocket| {
+            Box::pin(async move {
+                if let Err(err) = liftoff() {
+                    error!("Error: {}", err);
+                    rocket.shutdown().notify();
+                }
+            })
+        }))
         .launch()
         .await?;
 
@@ -105,7 +105,9 @@ fn get_user_info(token: Option<Token>) -> String {
             "**Biscuit:**\n\n{}\n\n\
             **Dump:**\n\n{}",
             biscuit.print(),
-            biscuit.authorizer().map_or_else(|e| format!("Error: {}", e).to_string(), |a| a.dump_code()),
+            biscuit
+                .authorizer()
+                .map_or_else(|e| format!("Error: {}", e).to_string(), |a| a.dump_code()),
         ),
         None => "Not authenticated".to_string(),
     }
@@ -162,24 +164,19 @@ async fn handle_request(
 #[post("/update-content/github")]
 fn update_content_github() -> Result<(), Error> {
     // Update repository
-    pull_repository()
-        .map_err(Error::CannotPullOutdatedRepository)?;
+    pull_repository().map_err(Error::CannotPullOutdatedRepository)?;
 
     // Remove outdated websites
-    fs::remove_dir_all(DEST_DIR.as_path())
-        .map_err(Error::CannotDeleteOutdatedWebsites)?;
+    fs::remove_dir_all(DEST_DIR.as_path()).map_err(Error::CannotDeleteOutdatedWebsites)?;
 
     // Pre-generate default website as we will access it at some point anyway
-    generate_default_website()
-        .map_err(Error::WebsiteGenerationError)?;
+    generate_default_website().map_err(Error::WebsiteGenerationError)?;
 
     Ok(())
 }
 
 #[post("/update-content/<source>")]
-fn update_content_other(
-    source: &str,
-) -> BadRequest<String> {
+fn update_content_other(source: &str) -> BadRequest<String> {
     BadRequest(format!("Source '{source}' is not supported."))
 }
 
@@ -197,42 +194,55 @@ async fn _handle_request<'r>(
     let path = decode(origin.path().as_str()).unwrap().into_owned();
     trace!("GET {}", &path);
 
-    let user_profiles: Vec<String> = biscuit.as_ref()
-        .map(|b| b
-            .authorizer().unwrap()
-            .query_all("data($name) <- profile($name)").unwrap()
-            .iter().map(|f: &Fact|
-                match f.predicate.terms.get(0).unwrap() {
+    let user_profiles: Vec<String> = biscuit
+        .as_ref()
+        .map(|b| {
+            b.authorizer()
+                .unwrap()
+                .query_all("data($name) <- profile($name)")
+                .unwrap()
+                .iter()
+                .map(|f: &Fact| match f.predicate.terms.get(0).unwrap() {
                     Term::Str(s) => s.clone(),
                     t => panic!("Term {t} should be of type String"),
-                }
-            )
-            .collect()
-        )
+                })
+                .collect()
+        })
         .unwrap_or_default();
     let website_id = WebsiteId::from(&user_profiles);
 
-    let stored_objects: Vec<String> = object_reader.list_objects(&path, &website_id)
-        .map_err(|err| {
-            error!("Error when listing objects matching '{}': {}", &path, err);
-            err
-        })?;
-    let Some(object_key) = matching_files(&path, &stored_objects).first().map(|o| o.to_owned()) else {
+    let stored_objects: Vec<String> =
+        object_reader
+            .list_objects(&path, &website_id)
+            .map_err(|err| {
+                error!("Error when listing objects matching '{}': {}", &path, err);
+                err
+            })?;
+    let Some(object_key) = matching_files(&path, &stored_objects)
+        .first()
+        .map(|o| o.to_owned())
+    else {
         error!("No file matching '{}' found in stored objects", &path);
-        return Ok(Either::Right(NotFound(())))
+        return Ok(Either::Right(NotFound(())));
     };
 
     let allowed_profiles = allowed_profiles(&object_key);
     let Some(allowed_profiles) = allowed_profiles else {
         // If allowed profiles is empty, it means it's a static file
-        trace!("File <{}> did not explicitly allow profiles, serving static file", &path);
+        trace!(
+            "File <{}> did not explicitly allow profiles, serving static file",
+            &path
+        );
 
-        return Ok(Either::Left(object_reader.read_object(&object_key, &website_id).await))
+        return Ok(Either::Left(
+            object_reader.read_object(&object_key, &website_id).await,
+        ));
     };
     debug!(
         "Page <{}> can be read by {}",
         &path,
-        allowed_profiles.iter()
+        allowed_profiles
+            .iter()
             .map(|p| format!("'{}'", p))
             .collect::<Vec<_>>()
             .join(", ")
@@ -242,7 +252,8 @@ async fn _handle_request<'r>(
         if allowed_profile == DEFAULT_PROFILE {
             profile = Some(allowed_profile);
         } else if let Some(ref biscuit) = biscuit {
-            let authorizer = authorizer!(r#"
+            let authorizer = authorizer!(
+                r#"
             operation("read");
             right({p}, "read");
             right("*", "read");
@@ -251,7 +262,9 @@ async fn _handle_request<'r>(
               operation($op),
               profile($p),
               right($p, $op);
-            "#, p = allowed_profile.clone());
+            "#,
+                p = allowed_profile.clone()
+            );
             if biscuit.authorize(&authorizer).is_ok() {
                 profile = Some(allowed_profile);
             }
@@ -259,10 +272,12 @@ async fn _handle_request<'r>(
     }
     if profile.is_none() {
         debug!("No profile allowed in token");
-        return Ok(Either::Right(NotFound(())))
+        return Ok(Either::Right(NotFound(())));
     }
 
-    Ok(Either::Left(object_reader.read_object(object_key, &website_id).await))
+    Ok(Either::Left(
+        object_reader.read_object(object_key, &website_id).await,
+    ))
 }
 
 fn allowed_profiles<'r>(path: &String) -> Option<Vec<String>> {
@@ -310,7 +325,7 @@ impl<'r> FromRequest<'r> for Token {
             token: &str,
             token_source: &str,
             biscuit: &mut Option<Biscuit>,
-            should_save: &mut bool
+            should_save: &mut bool,
         ) {
             // Because tokens can be passed as URL query params,
             // they might have the "=" padding characters remove.
@@ -351,7 +366,10 @@ impl<'r> FromRequest<'r> for Token {
 
         // Check authorization headers
         let authorization_headers: Vec<&str> = request.headers().get("Authorization").collect();
-        debug!("{} 'Authorization' headers provided", authorization_headers.len());
+        debug!(
+            "{} 'Authorization' headers provided",
+            authorization_headers.len()
+        );
         for authorization in authorization_headers {
             if authorization.starts_with("Bearer ") {
                 debug!("Bearer Authorization provided");
@@ -363,13 +381,19 @@ impl<'r> FromRequest<'r> for Token {
         }
 
         // Check query params
-        if let Some(token) = request.query_value::<String>(TOKEN_QUERY_PARAM_NAME).and_then(Result::ok) {
+        if let Some(token) = request
+            .query_value::<String>(TOKEN_QUERY_PARAM_NAME)
+            .and_then(Result::ok)
+        {
             debug!("Found token query param");
             process_token(&token, "token query param", &mut biscuit, &mut should_save);
         }
 
         match biscuit {
-            Some(biscuit) => Outcome::Success(Token { biscuit, should_save }),
+            Some(biscuit) => Outcome::Success(Token {
+                biscuit,
+                should_save,
+            }),
             None => Outcome::Forward(Status::Unauthorized),
         }
     }
@@ -382,24 +406,26 @@ impl<'r> FromRequest<'r> for RefreshedToken {
     type Error = ();
 
     async fn from_request(request: &'r Request<'_>) -> request::Outcome<Self, Self::Error> {
-        let Some(refresh_token) = request.query_value::<String>(REFRESH_TOKEN_QUERY_PARAM_NAME) else {
+        let Some(refresh_token) = request.query_value::<String>(REFRESH_TOKEN_QUERY_PARAM_NAME)
+        else {
             debug!("Refresh token query param not found.");
-            return Outcome::Forward(Status::Unauthorized)
+            return Outcome::Forward(Status::Unauthorized);
         };
         let Ok(mut refresh_token) = refresh_token else {
             debug!("Error: Refresh token query param could not be decoded as `String`.");
-            return Outcome::Forward(Status::Unauthorized)
+            return Outcome::Forward(Status::Unauthorized);
         };
 
         debug!("Found refresh token query param");
 
         // If query contains `force=true`, `force` or `force=<anything>`, don't search for an existing token.
         // If instead it contains `force=false` or `force` is not present, search for a token to augment.
-        let token = if should_force_token_refresh(request.query_value::<bool>(FORCE_QUERY_PARAM_NAME)) {
-            None
-        } else {
-            Token::from_request(request).await.succeeded()
-        };
+        let token =
+            if should_force_token_refresh(request.query_value::<bool>(FORCE_QUERY_PARAM_NAME)) {
+                None
+            } else {
+                Token::from_request(request).await.succeeded()
+            };
 
         refresh_token = decode(&refresh_token).unwrap().to_string();
         // Because tokens can be passed as URL query params,
@@ -418,7 +444,7 @@ impl<'r> FromRequest<'r> for RefreshedToken {
                 );
                 if let Err(err) = refresh_biscuit.authorize(&authorizer) {
                     debug!("Refresh token is invalid: {}", err);
-                    return Outcome::Forward(Status::Unauthorized)
+                    return Outcome::Forward(Status::Unauthorized);
                 }
 
                 trace!("Baking biscuit from refresh token");
@@ -462,16 +488,21 @@ fn should_force_token_refresh(query_param_value: Option<Result<bool, Errors<'_>>
     query_param_value.is_some_and(|v| v.unwrap_or(true))
 }
 
-fn add_cookie_if_necessary(token: &Token, cookies: &CookieJar<'_>) {
+fn add_cookie_if_necessary(
+    token: &Token,
+    cookies: &CookieJar<'_>,
+) {
     if token.should_save {
         match token.biscuit.to_base64() {
             Ok(base64) => {
-                cookies.add(Cookie::build((TOKEN_COOKIE_NAME, base64))
-                    .path("/")
-                    .max_age(Duration::days(365 * 5))
-                    .http_only(true)
-                    .secure(true)
-                    .same_site(SameSite::Strict));
+                cookies.add(
+                    Cookie::build((TOKEN_COOKIE_NAME, base64))
+                        .path("/")
+                        .max_age(Duration::days(365 * 5))
+                        .http_only(true)
+                        .secure(true)
+                        .same_site(SameSite::Strict),
+                );
             },
             Err(err) => {
                 error!("Error setting token cookie: {}", err);
@@ -480,7 +511,10 @@ fn add_cookie_if_necessary(token: &Token, cookies: &CookieJar<'_>) {
     }
 }
 
-fn merge_biscuits(b1: &Biscuit, b2: &Biscuit) -> Option<Biscuit> {
+fn merge_biscuits(
+    b1: &Biscuit,
+    b2: &Biscuit,
+) -> Option<Biscuit> {
     let source = b1.authorizer().unwrap().dump_code();
     let new_code = b2.authorizer().unwrap().dump_code();
 
@@ -496,16 +530,20 @@ fn merge_biscuits(b1: &Biscuit, b2: &Biscuit) -> Option<Biscuit> {
     }
 }
 
-fn matching_files<'a>(query: &str, stored_objects: &'a Vec<String>) -> Vec<&'a String> {
-    stored_objects.into_iter()
+fn matching_files<'a>(
+    query: &str,
+    stored_objects: &'a Vec<String>,
+) -> Vec<&'a String> {
+    stored_objects
+        .into_iter()
         .filter(|p| {
             let query = query.strip_suffix("index.html").unwrap_or(query);
             let Some(mut p) = p.strip_prefix(query) else {
-                return false
+                return false;
             };
             p = p.trim_start_matches('/');
             p = p.strip_prefix("index.html").unwrap_or(p);
-            return p.is_empty() || p.starts_with('@')
+            return p.is_empty() || p.starts_with('@');
         })
         .collect()
 }
@@ -513,7 +551,7 @@ fn matching_files<'a>(query: &str, stored_objects: &'a Vec<String>) -> Vec<&'a S
 fn add_padding(base64_string: &str) -> String {
     // If the base64 string is already padded, don't do anything.
     if base64_string.ends_with("=") {
-        return base64_string.to_string()
+        return base64_string.to_string();
     }
 
     match base64_string.len() % 4 {
@@ -534,11 +572,18 @@ enum Error {
 }
 
 impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         match self {
             Error::WebsiteGenerationError(err) => write!(f, "Website generation error: {err}"),
-            Error::CannotPullOutdatedRepository(err) => write!(f, "Cannot pull outdated repository: {err}"),
-            Error::CannotDeleteOutdatedWebsites(err) => write!(f, "Cannot delete outdated websites: {err}"),
+            Error::CannotPullOutdatedRepository(err) => {
+                write!(f, "Cannot pull outdated repository: {err}")
+            },
+            Error::CannotDeleteOutdatedWebsites(err) => {
+                write!(f, "Cannot delete outdated websites: {err}")
+            },
         }
     }
 }
@@ -559,41 +604,29 @@ mod tests {
             "/whatever/index.htmlindex.html@_default",
             "/whatever/other-page/index.html@_default",
             "/whatever/a/b.html@_default",
-        ].into_iter().map(|p| p.to_string()).collect::<Vec<String>>();
+        ]
+        .into_iter()
+        .map(|p| p.to_string())
+        .collect::<Vec<String>>();
 
-        assert_eq!(
-            matching_files("", &stored_objects),
-            vec![
-                "/index.html@_default",
-            ]
-        );
-        assert_eq!(
-            matching_files("/", &stored_objects),
-            vec![
-                "/index.html@_default",
-            ]
-        );
-        assert_eq!(
-            matching_files("/index.html", &stored_objects),
-            vec![
-                "/index.html@_default",
-            ]
-        );
+        assert_eq!(matching_files("", &stored_objects), vec![
+            "/index.html@_default",
+        ]);
+        assert_eq!(matching_files("/", &stored_objects), vec![
+            "/index.html@_default",
+        ]);
+        assert_eq!(matching_files("/index.html", &stored_objects), vec![
+            "/index.html@_default",
+        ]);
 
-        assert_eq!(
-            matching_files("/whatever", &stored_objects),
-            vec![
-                "/whatever/index.html@friends",
-                "/whatever/index.html@family",
-            ]
-        );
-        assert_eq!(
-            matching_files("/whatever/", &stored_objects),
-            vec![
-                "/whatever/index.html@friends",
-                "/whatever/index.html@family",
-            ]
-        );
+        assert_eq!(matching_files("/whatever", &stored_objects), vec![
+            "/whatever/index.html@friends",
+            "/whatever/index.html@family",
+        ]);
+        assert_eq!(matching_files("/whatever/", &stored_objects), vec![
+            "/whatever/index.html@friends",
+            "/whatever/index.html@family",
+        ]);
         assert_eq!(
             matching_files("/whatever/index.html", &stored_objects),
             vec![
@@ -610,12 +643,9 @@ mod tests {
             matching_files("/whatever/a/b", &stored_objects),
             Vec::<&str>::new()
         );
-        assert_eq!(
-            matching_files("/whatever/a/b.html", &stored_objects),
-            vec![
-                "/whatever/a/b.html@_default",
-            ]
-        );
+        assert_eq!(matching_files("/whatever/a/b.html", &stored_objects), vec![
+            "/whatever/a/b.html@_default",
+        ]);
     }
 
     #[test]
@@ -624,21 +654,18 @@ mod tests {
             "/style.css@_default",
             "/anything.custom@friends",
             "/anything.custom@family",
-        ].into_iter().map(|p| p.to_string()).collect::<Vec<String>>();
+        ]
+        .into_iter()
+        .map(|p| p.to_string())
+        .collect::<Vec<String>>();
 
-        assert_eq!(
-            matching_files("/style.css", &stored_objects),
-            vec![
-                "/style.css@_default",
-            ]
-        );
-        assert_eq!(
-            matching_files("/anything.custom", &stored_objects),
-            vec![
-                "/anything.custom@friends",
-                "/anything.custom@family",
-            ]
-        );
+        assert_eq!(matching_files("/style.css", &stored_objects), vec![
+            "/style.css@_default",
+        ]);
+        assert_eq!(matching_files("/anything.custom", &stored_objects), vec![
+            "/anything.custom@friends",
+            "/anything.custom@family",
+        ]);
     }
 
     #[test]
@@ -659,8 +686,17 @@ mod tests {
         assert_eq!(should_force_token_refresh(None), false);
         assert_eq!(should_force_token_refresh(Some(Ok(true))), true);
         assert_eq!(should_force_token_refresh(Some(Ok(false))), false);
-        assert_eq!(should_force_token_refresh(Some(Err(Errors::new().with_name("yes")))), true);
-        assert_eq!(should_force_token_refresh(Some(Err(Errors::new().with_name("no")))), true);
-        assert_eq!(should_force_token_refresh(Some(Err(Errors::new().with_name("")))), true);
+        assert_eq!(
+            should_force_token_refresh(Some(Err(Errors::new().with_name("yes")))),
+            true
+        );
+        assert_eq!(
+            should_force_token_refresh(Some(Err(Errors::new().with_name("no")))),
+            true
+        );
+        assert_eq!(
+            should_force_token_refresh(Some(Err(Errors::new().with_name("")))),
+            true
+        );
     }
 }

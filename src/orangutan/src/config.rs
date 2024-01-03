@@ -1,4 +1,7 @@
-use std::{path::{PathBuf, Path}, env, collections::HashSet, fmt::Display};
+use std::collections::HashSet;
+use std::env;
+use std::fmt::Display;
+use std::path::{Path, PathBuf};
 
 use lazy_static::lazy_static;
 
@@ -20,15 +23,16 @@ const WEBSITE_DIR_NAME: &'static str = "website";
 
 lazy_static! {
     static ref WORK_DIR: PathBuf = env::current_dir().unwrap();
-    pub static ref WEBSITE_REPOSITORY: String = env::var("WEBSITE_REPOSITORY").expect("Environment variable `WEBSITE_REPOSITORY` is required.");
+    pub static ref WEBSITE_REPOSITORY: String = env::var("WEBSITE_REPOSITORY")
+        .expect("Environment variable `WEBSITE_REPOSITORY` is required.");
     pub static ref BASE_DIR: PathBuf = WORK_DIR.join(".orangutan");
     pub static ref WEBSITE_ROOT: PathBuf = BASE_DIR.join("website");
     pub static ref KEYS_DIR: PathBuf = BASE_DIR.join("keys");
     pub static ref HUGO_CONFIG_DIR: PathBuf = BASE_DIR.join("hugo-config");
     pub static ref DEST_DIR: PathBuf = BASE_DIR.join("out");
     pub static ref WEBSITE_DATA_DIR: PathBuf = DEST_DIR.join("data");
-    pub static ref SUFFIXED_EXTENSIONS: Vec<&'static str> = vec!["html", "json", "xml", "css", "js", "txt"];
-
+    pub static ref SUFFIXED_EXTENSIONS: Vec<&'static str> =
+        vec!["html", "json", "xml", "css", "js", "txt"];
     pub static ref MODE: Result<String, env::VarError> = env::var("MODE");
     pub static ref KEYS_MODE: Result<String, env::VarError> = env::var("KEYS_MODE");
 }
@@ -61,7 +65,7 @@ impl WebsiteId {
 impl From<&Vec<String>> for WebsiteId {
     fn from(value: &Vec<String>) -> Self {
         if value.is_empty() {
-            return Self::default()
+            return Self::default();
         }
 
         // Convert Vec<String> to HashSet<String> to get unique profiles
@@ -71,14 +75,20 @@ impl From<&Vec<String>> for WebsiteId {
         let mut used_profiles = used_profiles().clone();
         // Insert special "*" profile so it is kept for website generation
         used_profiles.insert("*".to_string());
-        profiles = profiles.intersection(&used_profiles).map(|s| s.clone()).collect();
+        profiles = profiles
+            .intersection(&used_profiles)
+            .map(|s| s.clone())
+            .collect();
 
-        return Self { profiles }
+        return Self { profiles };
     }
 }
 
 impl Display for WebsiteId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         write!(f, "{}", self.dir_name())
     }
 }
@@ -86,7 +96,7 @@ impl Display for WebsiteId {
 impl Default for WebsiteId {
     fn default() -> Self {
         let profiles = vec![DEFAULT_PROFILE.to_string()].into_iter().collect();
-        return Self { profiles }
+        return Self { profiles };
     }
 }
 
