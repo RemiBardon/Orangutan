@@ -47,27 +47,9 @@ lazy_static! {
     };
 }
 
-#[rocket::main]
-async fn main() {
-    let subscriber = FmtSubscriber::builder()
-        .with_max_level(Level::TRACE)
-        .finish();
-
-    tracing::subscriber::set_global_default(subscriber).expect("Failed to set tracing subscriber.");
-
-    // env_logger::init();
-    // env_logger::Builder::new()
-    //     .target(env_logger::Target::Stdout)
-    //     .init();
-
-    if let Err(err) = throwing_main().await {
-        error!("Error: {}", err);
-        exit(1);
-    }
-}
-
-async fn throwing_main() -> Result<(), Box<dyn std::error::Error>> {
-    let rocket = rocket::build()
+#[rocket::launch]
+fn rocket() -> _ {
+    rocket::build()
         .mount("/", routes![
             clear_cookies,
             handle_refresh_token,
@@ -78,7 +60,16 @@ async fn throwing_main() -> Result<(), Box<dyn std::error::Error>> {
         ])
         .register("/", catchers![not_found])
         .manage(ObjectReader::new())
-        .attach(AdHoc::on_liftoff("Liftoff website generation", |rocket| {
+        .attach(AdHoc::on_liftoff("Tracing subsciber", |_| {
+            Box::pin(async move {
+                let subscriber = FmtSubscriber::builder()
+                    .with_max_level(Level::TRACE)
+                    .finish();
+                tracing::subscriber::set_global_default(subscriber)
+                    .expect("Failed to set tracing subscriber.");
+            })
+        }))
+        .attach(AdHoc::on_liftoff("Website generation", |rocket| {
             Box::pin(async move {
                 if let Err(err) = liftoff() {
                     error!("Error: {}", err);
@@ -86,10 +77,6 @@ async fn throwing_main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             })
         }))
-        .launch()
-        .await?;
-
-    Ok(())
 }
 
 fn liftoff() -> Result<(), Error> {
