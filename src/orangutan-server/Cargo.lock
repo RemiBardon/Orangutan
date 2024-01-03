@@ -896,7 +896,7 @@ dependencies = [
 
 [[package]]
 name = "orangutan-server"
-version = "0.3.2"
+version = "0.3.0"
 dependencies = [
  "base64 0.21.5",
  "biscuit-auth",
