@@ -83,8 +83,7 @@ async fn throwing_main() -> Result<(), Box<dyn std::error::Error>> {
         .attach(AdHoc::on_liftoff("Liftoff website generation", |rocket| Box::pin(async move {
             if let Err(err) = liftoff() {
                 error!("Error: {}", err);
-                rocket.shutdown().await;
-                exit(1);
+                rocket.shutdown().notify();
             }
         })))
         .launch()
