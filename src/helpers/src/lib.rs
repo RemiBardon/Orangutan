@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use std::fs::{self, File};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use lazy_static::lazy_static;
 use serde_json::{self, Value};
@@ -16,7 +16,7 @@ use tracing::{debug, error, trace};
 use crate::config::*;
 
 lazy_static! {
-    static ref USED_PROFILES: Mutex<Option<&'static HashSet<String>>> = Mutex::new(None);
+    static ref USED_PROFILES: Arc<Mutex<Option<&'static HashSet<String>>>> = Arc::new(Mutex::new(None));
 }
 
 pub fn used_profiles<'a>() -> &'a HashSet<String> {

@@ -3,7 +3,7 @@ mod config;
 use std::path::{Path, PathBuf};
 use std::process::exit;
 use std::time::SystemTime;
-use std::{fmt, fs, io};
+use std::fmt;
 
 use biscuit::builder::{Fact, Term};
 use biscuit::macros::authorizer;
@@ -154,7 +154,7 @@ fn update_content_github() -> Result<(), Error> {
     pull_repository().map_err(Error::CannotPullOutdatedRepository)?;
 
     // Remove outdated websites
-    fs::remove_dir_all(DEST_DIR.as_path()).map_err(Error::CannotDeleteOutdatedWebsites)?;
+    remove_outdated_websites().map_err(Error::CannotDeleteOutdatedWebsites)?;
 
     // Pre-generate default website as we will access it at some point anyway
     generate_default_website().map_err(Error::WebsiteGenerationError)?;
@@ -571,7 +571,7 @@ fn add_padding(base64_string: &str) -> String {
 enum Error {
     WebsiteGenerationError(generate::Error),
     CannotPullOutdatedRepository(generate::Error),
-    CannotDeleteOutdatedWebsites(io::Error),
+    CannotDeleteOutdatedWebsites(generate::Error),
 }
 
 impl fmt::Display for Error {

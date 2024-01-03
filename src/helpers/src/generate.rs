@@ -341,6 +341,19 @@ fn empty_index_json(website_dir: &PathBuf) -> Result<(), io::Error> {
     Ok(())
 }
 
+pub fn remove_outdated_websites() -> Result<(), Error> {
+    // Remove outdated websites
+    fs::remove_dir_all(DEST_DIR.as_path()).map_err(Error::CannotDeleteOutdatedWebsites)?;
+
+    // Clear caches
+    HUGO_CONFIG_GENERATED.store(false, Ordering::Relaxed);
+    DATA_FILES_GENERATED.store(false, Ordering::Relaxed);
+    GENERATED_WEBSITES.lock().unwrap().clear();
+    *super::USED_PROFILES.lock().unwrap() = None;
+
+    Ok(())
+}
+
 #[derive(Debug)]
 pub enum Error {
     CannotExecuteCommand(String, io::Error),
@@ -348,6 +361,7 @@ pub enum Error {
     CannotGenerateWebsite(Box<Error>),
     CannotEmptyIndexJson(io::Error),
     CannotCreateHugoConfigFile(io::Error),
+    CannotDeleteOutdatedWebsites(io::Error),
 }
 
 impl fmt::Display for Error {
@@ -368,6 +382,9 @@ impl fmt::Display for Error {
             },
             Error::CannotCreateHugoConfigFile(err) => {
                 write!(f, "Could create hugo config file: {err}")
+            },
+            Error::CannotDeleteOutdatedWebsites(err) => {
+                write!(f, "Cannot delete outdated websites: {err}")
             },
         }
     }
