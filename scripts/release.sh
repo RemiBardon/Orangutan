@@ -2,7 +2,7 @@
 
 SRC=src/orangutan
 
-VERSION="$(sed -n 's/version = "\(0.1.0\)"/\1/p' "$SRC"/Cargo.toml)"
+VERSION="$(rg 'version = "(\d+\.\d+.\d+)"' -N --replace '$1' "$SRC"/Cargo.toml)"
 TAG="v${VERSION:?}"
 
 echo "Creating tag '${TAG}'…"
