@@ -2,6 +2,8 @@ on: [push, pull_request]
 
 name: Test
 
+# TODO: Run for all crates
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -36,10 +38,10 @@ jobs:
           key: ${{ runner.os }}-${{ matrix.target }}-cargo
 
       - name: Test on ${{ matrix.target }}
-        working-directory: ./src/orangutan
+        working-directory: ./src/orangutan-server
         run: cargo test
 
       # TODO: Only check code style for one target
       - name: Check code style
-        working-directory: ./src/orangutan
+        working-directory: ./src/orangutan-server
         run: cargo fmt -- --check

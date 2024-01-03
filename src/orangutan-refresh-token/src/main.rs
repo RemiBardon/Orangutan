@@ -1,6 +1,6 @@
 use std::fs::File;
 use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::exit;
 use std::time::SystemTime;
 use std::{env, fmt, io};
@@ -11,13 +11,12 @@ extern crate biscuit_auth as biscuit;
 use biscuit::macros::{block, fact};
 use biscuit::Biscuit;
 use lazy_static::lazy_static;
+use orangutan_helpers::config::KEYS_DIR;
 use tracing::{error, trace};
 
 const ROOT_KEY_NAME: &'static str = "_biscuit_root";
 
 lazy_static! {
-    static ref BASE_DIR: &'static Path = Path::new(".orangutan");
-    static ref KEYS_DIR: PathBuf = BASE_DIR.join("keys");
     static ref KEYS_MODE: Result<String, env::VarError> = env::var("KEYS_MODE");
     static ref ROOT_KEY: biscuit::KeyPair = {
         let keys_reader = <dyn KeysReader>::detect();

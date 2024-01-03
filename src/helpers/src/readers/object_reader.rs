@@ -5,8 +5,8 @@ use rocket::fs::NamedFile;
 use rocket::response::Responder;
 use tracing::trace;
 
-use crate::config::WebsiteId;
 use crate::generate::{self, generate_website_if_needed};
+use crate::website_id::WebsiteId;
 
 pub type ObjectReader = LocalObjectReader;
 

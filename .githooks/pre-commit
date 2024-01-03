@@ -18,7 +18,7 @@ then
             if [[ $line == *.rs ]]
             then
                 # format file
-                rustfmt --edition 2021 -l -- $(pwd)/${line:3}
+                rustfmt --edition 2021 --config-path src -l -- $(pwd)/${line:3}
                 # add changes
                 git add $(pwd)/${line:3}
             fi

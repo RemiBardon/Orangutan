@@ -1,17 +1,11 @@
-mod config;
-mod generate;
-mod helpers;
-mod keys_reader;
-
 use core::fmt;
 use std::process::exit;
 
+use orangutan_helpers::generate::{self, *};
+use orangutan_helpers::used_profiles;
+use orangutan_helpers::website_id::WebsiteId;
 use tracing::{debug, error, Level};
 use tracing_subscriber::FmtSubscriber;
-
-use crate::config::*;
-use crate::generate::*;
-use crate::helpers::*;
 
 fn main() {
     let subscriber = FmtSubscriber::builder()

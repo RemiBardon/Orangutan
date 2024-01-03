@@ -1,6 +1,6 @@
 #!/bin/bash
 
-SRC=src/orangutan
+SRC=src/orangutan-server
 
 VERSION="$(rg 'version = "(\d+\.\d+.\d+)"' -N --replace '$1' "$SRC"/Cargo.toml)"
 TAG="v${VERSION:?}"

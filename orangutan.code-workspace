@@ -1,0 +1,18 @@
+{
+	"folders": [
+		{
+			"path": "."
+		}
+	],
+	"settings": {
+		"search.exclude": {
+			"src/*/target": true
+		}
+	},
+	"extensions": {
+		"recommendations": [
+			"tamasfe.even-better-toml",
+			"rust-lang.rust-analyzer"
+		]
+	}
+}

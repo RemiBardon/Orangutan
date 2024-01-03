@@ -4,3 +4,5 @@ render-diagrams:
 	@(echo "\n"'⚠️ Adobe XD diagrams are not exported automatically.'"\n"'  Open `*.xd` files and batch export diagrams in SVG format in <./assets/>.')
 release:
 	@(scripts/release.sh)
+format:
+	@(bash .githooks/pre-commit)

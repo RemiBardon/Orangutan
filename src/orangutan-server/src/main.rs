@@ -1,8 +1,4 @@
 mod config;
-mod generate;
-mod helpers;
-mod keys_reader;
-mod object_reader;
 
 use std::path::{Path, PathBuf};
 use std::process::exit;
@@ -15,8 +11,14 @@ use biscuit::Biscuit;
 use biscuit_auth as biscuit;
 use lazy_static::lazy_static;
 use object_reader::{ObjectReader, ReadObjectResponse};
+use orangutan_helpers::generate::{self, *};
+use orangutan_helpers::readers::keys_reader::*;
+use orangutan_helpers::readers::object_reader;
+use orangutan_helpers::website_id::WebsiteId;
+use orangutan_helpers::{data_file, read_allowed};
 use rocket::fairing::AdHoc;
 use rocket::form::Errors;
+use rocket::fs::NamedFile;
 use rocket::http::uri::Origin;
 use rocket::http::{Cookie, CookieJar, SameSite, Status};
 use rocket::outcome::Outcome;
@@ -30,9 +32,6 @@ use tracing_subscriber::FmtSubscriber;
 use urlencoding::decode;
 
 use crate::config::*;
-use crate::generate::*;
-use crate::helpers::*;
-use crate::keys_reader::KeysReader;
 
 lazy_static! {
     static ref ROOT_KEY: biscuit::KeyPair = {
@@ -57,6 +56,7 @@ fn rocket() -> _ {
             handle_request,
             get_user_info,
             update_content_github,
+            update_content_other,
         ])
         .register("/", catchers![not_found])
         .manage(ObjectReader::new())
@@ -168,8 +168,24 @@ fn update_content_other(source: &str) -> BadRequest<String> {
 }
 
 #[catch(404)]
-fn not_found() -> &'static str {
-    "This page doesn't exist or you are not allowed to see it."
+async fn not_found() -> Result<NamedFile, &'static str> {
+    let website_id = WebsiteId::default();
+    let website_dir = match generate_website_if_needed(&website_id) {
+        Ok(dir) => dir,
+        Err(err) => {
+            error!("Could not get default website directory: {}", err);
+            return Err("This page doesn't exist or you are not allowed to see it.");
+        },
+    };
+    let file_path = website_dir.join(NOT_FOUND_FILE);
+    NamedFile::open(file_path.clone()).await.map_err(|err| {
+        error!(
+            "Could not read \"not found\" file at <{}>: {}",
+            file_path.display(),
+            err
+        );
+        "This page doesn't exist or you are not allowed to see it."
+    })
 }
 
 async fn _handle_request<'r>(
