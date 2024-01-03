@@ -102,7 +102,7 @@ fn _pull_repository() -> Result<(), Error> {
     let mut command = Command::new("git");
     command
         .args(vec!["-C", &WEBSITE_ROOT.display().to_string()])
-        .arg("pull");
+        .args(vec!["pull", "--rebase"]);
 
     trace!("Running `{:?}`…", command);
     let status = command
