@@ -6,7 +6,7 @@ on:
       - "v*.*.*"
 
 env:
-  SRC: src/orangutan
+  SRC: src/orangutan-server
   BIN: orangutan-server
 
 jobs:
