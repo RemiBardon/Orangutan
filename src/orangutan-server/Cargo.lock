@@ -884,8 +884,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "624a8340c38c1b80fd549087862da4ba43e08858af025b236e509b6649fc13d5"
 
 [[package]]
-name = "orangutan"
-version = "0.2.0"
+name = "orangutan-helpers"
+version = "0.1.0"
+dependencies = [
+ "biscuit-auth",
+ "lazy_static",
+ "rocket",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
+name = "orangutan-server"
+version = "0.3.0"
 dependencies = [
  "base64 0.21.5",
  "biscuit-auth",
@@ -897,17 +908,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "urlencoding",
-]
-
-[[package]]
-name = "orangutan-helpers"
-version = "0.1.0"
-dependencies = [
- "biscuit-auth",
- "lazy_static",
- "rocket",
- "serde_json",
- "tracing",
 ]
 
 [[package]]
