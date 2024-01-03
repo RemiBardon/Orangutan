@@ -145,24 +145,16 @@ fn _update_submodules() -> Result<(), Error> {
 fn _copy_hugo_config() -> Result<(), Error> {
     debug!("Copying hugo config…");
 
-    // Create config dir
-    let config_dir = HUGO_CONFIG_DIR.join("_default");
-    fs::create_dir_all(&config_dir).map_err(Error::CannotCreateHugoConfigFile)?;
-    debug!("Hugo config will be saved in <{}>", &config_dir.display());
-
-    // Read current config
-    let base_config = hugo(vec!["config"], true)?.stdout;
-
-    // Write new config file
-    let config_file = config_dir.join("hugo.toml");
-    let res = File::create(config_file)
-        .map_err(Error::CannotCreateHugoConfigFile)?
-        .write_all(&base_config)
-        .map_err(Error::CannotCreateHugoConfigFile)?;
+    // Copy config dir
+    // TODO: Support config that is not directory-based
+    let source = WEBSITE_ROOT.join("config");
+    let dest = HUGO_CONFIG_DIR.join("_default");
+    copy_directory(source.as_path(), dest.as_path()).map_err(Error::CannotCreateHugoConfigFile)?;
+    debug!("Hugo config will be saved in <{}>", &dest.display());
 
     HUGO_CONFIG_GENERATED.store(true, Ordering::Relaxed);
 
-    Ok(res)
+    Ok(())
 }
 
 fn gen_hugo_config(website_id: &WebsiteId) -> Result<(), Error> {
