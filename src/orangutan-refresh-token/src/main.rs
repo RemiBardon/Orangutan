@@ -23,7 +23,7 @@ lazy_static! {
         match keys_reader.get_root_biscuit_key() {
             Ok(public_key) => public_key,
             Err(err) => {
-                error!("Error generating root Biscuit key: {}", err);
+                error!("Error generating root Biscuit key: {err}");
                 exit(1);
             },
         }
@@ -36,7 +36,7 @@ fn main() {
         let fact = fact!("profile({profile});");
         builder
             .add_fact(fact.clone())
-            .expect(&format!("Could not add fact '{:?}' to Biscuit", fact));
+            .expect(&format!("Could not add fact '{fact:?}' to Biscuit"));
     }
     match builder.build(&ROOT_KEY) {
         Ok(mut biscuit) => {
@@ -59,12 +59,12 @@ fn main() {
             match biscuit.to_base64() {
                 Ok(biscuit_base64) => {
                     let biscuit_base64 = remove_padding(&biscuit_base64);
-                    println!("{}", biscuit_base64)
+                    println!("{biscuit_base64}")
                 },
-                Err(err) => error!("{}", err),
+                Err(err) => error!("Error converting Biscuit to Base64: {err}"),
             }
         },
-        Err(err) => error!("{}", err),
+        Err(err) => error!("Error building Biscuit: {err}"),
     }
 }
 
@@ -158,9 +158,9 @@ impl fmt::Display for Error {
         f: &mut fmt::Formatter<'_>,
     ) -> fmt::Result {
         match self {
-            Error::IO(err) => err.fmt(f),
-            Error::Env(err) => err.fmt(f),
-            Error::BiscuitFormat(err) => err.fmt(f),
+            Self::IO(err) => write!(f, "IO error: {err}"),
+            Self::Env(err) => write!(f, "Env error: {err}"),
+            Self::BiscuitFormat(err) => write!(f, "Biscuit format error: {err}"),
         }
     }
 }

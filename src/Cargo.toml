@@ -1,0 +1,9 @@
+[workspace]
+members = [
+    'helpers',
+    'orangutan-init',
+    'orangutan-preflight',
+    'orangutan-refresh-token',
+    'orangutan-server',
+]
+resolver = "2"

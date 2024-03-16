@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use lazy_static::lazy_static;
-use serde_json::{self, Value};
+use serde_json::Value;
 use tracing::{debug, error, trace};
 
 use crate::config::*;
