@@ -56,7 +56,7 @@ fn rocket() -> _ {
             update_content_github,
             update_content_other,
         ])
-        .register("/", catchers![not_found])
+        .register("/", catchers![unauthorized, not_found])
         .manage(ObjectReader::new())
         .attach(AdHoc::on_liftoff("Tracing subsciber", |_| {
             Box::pin(async move {
@@ -307,8 +307,7 @@ fn update_content_other(source: &str) -> BadRequest<String> {
     BadRequest(format!("Source '{source}' is not supported."))
 }
 
-#[catch(404)]
-async fn not_found() -> Result<NamedFile, &'static str> {
+async fn _not_found() -> Result<NamedFile, &'static str> {
     let website_id = WebsiteId::default();
     let website_dir = match generate_website_if_needed(&website_id) {
         Ok(dir) => dir,
@@ -326,6 +325,16 @@ async fn not_found() -> Result<NamedFile, &'static str> {
         );
         "This page doesn't exist or you are not allowed to see it."
     })
+}
+
+#[catch(401)]
+async fn unauthorized() -> Result<NamedFile, &'static str> {
+    _not_found().await
+}
+
+#[catch(404)]
+async fn not_found() -> Result<NamedFile, &'static str> {
+    _not_found().await
 }
 
 fn allowed_profiles<'r>(path: &String) -> Option<Vec<String>> {
