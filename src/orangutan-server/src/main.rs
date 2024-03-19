@@ -23,9 +23,9 @@ use rocket::http::uri::Origin;
 use rocket::http::{Cookie, CookieJar, SameSite, Status};
 use rocket::outcome::Outcome;
 use rocket::request::FromRequest;
-use rocket::response::status::{BadRequest, NotFound};
+use rocket::response::status::BadRequest;
 use rocket::response::Redirect;
-use rocket::{catch, catchers, get, post, request, routes, Either, Request, Responder, State};
+use rocket::{catch, catchers, get, post, request, routes, Request, Responder, State};
 use time::Duration;
 use tracing::{debug, error, trace, Level};
 use tracing_subscriber::FmtSubscriber;
@@ -70,7 +70,8 @@ fn rocket() -> _ {
         .attach(AdHoc::on_liftoff("Website generation", |rocket| {
             Box::pin(async move {
                 if let Err(err) = liftoff() {
-                    error!("Error: {}", err);
+                    // We drop the error to get a Rocket-formatted panic.
+                    drop(err);
                     rocket.shutdown().notify();
                 }
             })
@@ -183,7 +184,7 @@ async fn handle_request(
     origin: &Origin<'_>,
     token: Option<Token>,
     object_reader: &State<ObjectReader>,
-) -> Result<Either<ReadObjectResponse, NotFound<()>>, object_reader::Error> {
+) -> Result<Option<ReadObjectResponse>, object_reader::Error> {
     let biscuit = token.map(|t| t.biscuit);
 
     // FIXME: Handle error
@@ -222,7 +223,7 @@ async fn handle_request(
         .map(|o| o.to_owned())
     else {
         error!("No file matching '{}' found in stored objects", &path);
-        return Ok(Either::Right(NotFound(())));
+        return Ok(None);
     };
 
     let allowed_profiles = allowed_profiles(&object_key);
@@ -233,7 +234,7 @@ async fn handle_request(
             &path
         );
 
-        return Ok(Either::Left(
+        return Ok(Some(
             object_reader.read_object(&object_key, &website_id).await,
         ));
     };
@@ -279,10 +280,10 @@ async fn handle_request(
     }
     if profile.is_none() {
         debug!("No profile allowed in token");
-        return Ok(Either::Right(NotFound(())));
+        return Ok(None);
     }
 
-    Ok(Either::Left(
+    Ok(Some(
         object_reader.read_object(object_key, &website_id).await,
     ))
 }
