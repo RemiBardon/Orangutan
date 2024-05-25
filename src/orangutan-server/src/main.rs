@@ -24,8 +24,8 @@ use rocket::http::{Cookie, CookieJar, SameSite, Status};
 use rocket::outcome::Outcome;
 use rocket::request::FromRequest;
 use rocket::response::status::BadRequest;
-use rocket::response::Redirect;
-use rocket::{catch, catchers, get, post, request, routes, Request, Responder, State};
+use rocket::response::{self, Redirect, Responder};
+use rocket::{catch, catchers, get, post, request, routes, Request, State};
 use time::Duration;
 use tracing::{debug, error, trace, Level};
 use tracing_subscriber::FmtSubscriber;
@@ -184,7 +184,7 @@ async fn handle_request(
     origin: &Origin<'_>,
     token: Option<Token>,
     object_reader: &State<ObjectReader>,
-) -> Result<Option<ReadObjectResponse>, object_reader::Error> {
+) -> Result<Option<ReadObjectResponse>, Error> {
     let biscuit = token.map(|t| t.biscuit);
 
     // FIXME: Handle error
@@ -214,9 +214,9 @@ async fn handle_request(
     let stored_objects: Vec<String> =
         object_reader
             .list_objects(&path, &website_id)
-            .map_err(|err| {
-                error!("Error when listing objects matching '{}': {}", &path, err);
-                err
+            .map_err(|err| Error::CannotListObjects {
+                path: path.to_owned(),
+                err,
             })?;
     let Some(object_key) = matching_files(&path, &stored_objects)
         .first()
@@ -545,14 +545,28 @@ fn add_padding(base64_string: &str) -> String {
     }
 }
 
-#[derive(Debug, Responder)]
-#[response(status = 500)]
+#[derive(Debug)]
 enum Error {
     WebsiteGenerationError(generate::Error),
     CannotPullOutdatedRepository(generate::Error),
+    CannotListObjects {
+        path: String,
+        err: object_reader::Error,
+    },
     CannotTrashOutdatedWebsites(generate::Error),
     CannotRecoverTrash(generate::Error),
     CannotEmptyTrash(generate::Error),
+}
+
+#[rocket::async_trait]
+impl<'r> Responder<'r, 'static> for Error {
+    fn respond_to(
+        self,
+        _: &'r Request<'_>,
+    ) -> response::Result<'static> {
+        error!("{self}");
+        Err(Status::InternalServerError)
+    }
 }
 
 impl fmt::Display for Error {
@@ -564,6 +578,9 @@ impl fmt::Display for Error {
             Error::WebsiteGenerationError(err) => write!(f, "Website generation error: {err}"),
             Error::CannotPullOutdatedRepository(err) => {
                 write!(f, "Cannot pull outdated repository: {err}")
+            },
+            Error::CannotListObjects { path, err } => {
+                write!(f, "Error when listing objects matching '{path}': {err}")
             },
             Error::CannotTrashOutdatedWebsites(err) => {
                 write!(f, "Cannot trash outdated websites: {err}")

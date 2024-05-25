@@ -99,9 +99,8 @@ fn find(
     }
 }
 
-#[derive(Debug, Responder)]
+#[derive(Debug)]
 pub enum Error {
-    #[response(status = 500)]
     WebsiteGenerationError(generate::Error),
 }
 

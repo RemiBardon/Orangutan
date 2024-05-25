@@ -2,16 +2,13 @@ use core::fmt;
 use std::collections::HashSet;
 use std::env;
 use std::fs::{self, File};
-use std::io::{self, Cursor, Write};
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use lazy_static::lazy_static;
-use rocket::http::ContentType;
-use rocket::request::Request;
-use rocket::response::{self, Responder, Response};
 use tracing::{debug, info, trace};
 
 use crate::config::*;
@@ -427,19 +424,5 @@ impl fmt::Display for Error {
             },
             Error::IOError(err) => write!(f, "IO error: {err}"),
         }
-    }
-}
-
-#[rocket::async_trait]
-impl<'r> Responder<'r, 'static> for Error {
-    fn respond_to(
-        self,
-        _: &'r Request<'_>,
-    ) -> response::Result<'static> {
-        let res = self.to_string();
-        Response::build()
-            .header(ContentType::Plain)
-            .sized_body(res.len(), Cursor::new(res))
-            .ok()
     }
 }
