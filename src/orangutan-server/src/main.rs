@@ -4,12 +4,14 @@ use std::fmt;
 use std::ops::Deref;
 use std::path::Path;
 use std::process::exit;
+use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
 use biscuit::builder::{Fact, Term};
 use biscuit::macros::authorizer;
 use biscuit::Biscuit;
 use biscuit_auth as biscuit;
+use chrono::{DateTime, Utc};
 use lazy_static::lazy_static;
 use object_reader::{ObjectReader, ReadObjectResponse};
 use orangutan_helpers::generate::{self, *};
@@ -38,11 +40,16 @@ lazy_static! {
         match keys_reader.get_root_biscuit_key() {
             Ok(public_key) => public_key,
             Err(err) => {
-                error!("Error generating root Biscuit key: {}", err);
+                error!("Error generating root Biscuit key: {err}");
                 exit(1);
             },
         }
     };
+    /// A list of runtime errors, used to show error logs in an admin page
+    /// without having to open the cloud hosting provider's logs.
+    ///
+    /// // NOTE: `Arc` prevents race conditions
+    static ref ERRORS: Arc<Mutex<Vec<(DateTime<Utc>, String)>>> = Arc::new(Mutex::new(Vec::new()));
 }
 
 #[rocket::launch]
@@ -55,6 +62,7 @@ fn rocket() -> _ {
             get_user_info,
             update_content_github,
             update_content_other,
+            errors,
         ])
         .register("/", catchers![unauthorized, not_found])
         .manage(ObjectReader::new())
@@ -108,6 +116,21 @@ fn clear_cookies(cookies: &CookieJar<'_>) -> &'static str {
     "Success"
 }
 
+#[get("/_errors")]
+fn errors(token: Token) -> Result<String, Status> {
+    if token.profiles().contains(&"*".to_owned()) {
+        Ok(ERRORS
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(d, l)| format!("{d} | {l}"))
+            .collect::<Vec<_>>()
+            .join("\n"))
+    } else {
+        Err(Status::Unauthorized)
+    }
+}
+
 #[get("/<_..>?<refresh_token>")]
 fn handle_refresh_token(
     origin: &Origin,
@@ -150,7 +173,7 @@ fn handle_refresh_token(
     let new_biscuit = match builder.build(&ROOT_KEY) {
         Ok(biscuit) => biscuit,
         Err(err) => {
-            error!("Error: Could not append block to biscuit: {err}");
+            error(format!("Error: Could not append block to biscuit: {err}"));
             return Err(Status::InternalServerError);
         },
     };
@@ -172,8 +195,8 @@ fn handle_refresh_token(
             debug!("Redirecting to <{redirect_to}> from <{origin}>…");
             Ok(Redirect::found(redirect_to.path().to_string()))
         },
-        Err(e) => {
-            error!("{e}");
+        Err(err) => {
+            error(format!("{err}"));
             Err(Status::InternalServerError)
         },
     }
@@ -185,29 +208,13 @@ async fn handle_request(
     token: Option<Token>,
     object_reader: &State<ObjectReader>,
 ) -> Result<Option<ReadObjectResponse>, Error> {
-    let biscuit = token.map(|t| t.biscuit);
-
     // FIXME: Handle error
     let path = urlencoding::decode(origin.path().as_str())
         .unwrap()
         .into_owned();
     trace!("GET {}", &path);
 
-    let user_profiles: Vec<String> = biscuit
-        .as_ref()
-        .map(|b| {
-            b.authorizer()
-                .unwrap()
-                .query_all("data($name) <- profile($name)")
-                .unwrap()
-                .iter()
-                .map(|f: &Fact| match f.predicate.terms.get(0).unwrap() {
-                    Term::Str(s) => s.clone(),
-                    t => panic!("Term {t} should be of type String"),
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    let user_profiles: Vec<String> = token.as_ref().map(Token::profiles).unwrap_or_default();
     debug!("User has profiles {user_profiles:?}");
     let website_id = WebsiteId::from(&user_profiles);
 
@@ -222,7 +229,10 @@ async fn handle_request(
         .first()
         .map(|o| o.to_owned())
     else {
-        error!("No file matching '{}' found in stored objects", &path);
+        error(format!(
+            "No file matching '{}' found in stored objects",
+            &path
+        ));
         return Ok(None);
     };
 
@@ -248,6 +258,7 @@ async fn handle_request(
             .join(", ")
     );
     let mut profile: Option<String> = None;
+    let biscuit = token.map(|t| t.biscuit);
     for allowed_profile in allowed_profiles {
         trace!("Checking if profile '{allowed_profile}' exists in token…");
         if allowed_profile == DEFAULT_PROFILE {
@@ -300,7 +311,7 @@ fn update_content_github() -> Result<(), Error> {
     // Pre-generate default website as we will access it at some point anyway
     match generate_default_website().map_err(Error::WebsiteGenerationError) {
         Err(err) => {
-            error!("{err}");
+            error(format!("{err}"));
             recover_trash(state).map_err(Error::CannotRecoverTrash)
         },
         Ok(()) => empty_trash(state).map_err(Error::CannotEmptyTrash),
@@ -317,17 +328,17 @@ async fn _not_found() -> Result<NamedFile, &'static str> {
     let website_dir = match generate_website_if_needed(&website_id) {
         Ok(dir) => dir,
         Err(err) => {
-            error!("Could not get default website directory: {}", err);
+            error(format!("Could not get default website directory: {}", err));
             return Err("This page doesn't exist or you are not allowed to see it.");
         },
     };
     let file_path = website_dir.join(NOT_FOUND_FILE);
     NamedFile::open(file_path.clone()).await.map_err(|err| {
-        error!(
+        error(format!(
             "Could not read \"not found\" file at <{}>: {}",
             file_path.display(),
             err
-        );
+        ));
         "This page doesn't exist or you are not allowed to see it."
     })
 }
@@ -366,6 +377,12 @@ fn allowed_profiles<'r>(path: &String) -> Option<Vec<String>> {
 
 struct Token {
     biscuit: Biscuit,
+}
+
+impl Token {
+    fn profiles(&self) -> Vec<String> {
+        profiles(&self.biscuit)
+    }
 }
 
 impl Deref for Token {
@@ -472,6 +489,20 @@ impl<'r> FromRequest<'r> for Token {
     }
 }
 
+fn profiles(biscuit: &Biscuit) -> Vec<String> {
+    biscuit
+        .authorizer()
+        .unwrap()
+        .query_all("data($name) <- profile($name)")
+        .unwrap()
+        .iter()
+        .map(|f: &Fact| match f.predicate.terms.get(0).unwrap() {
+            Term::Str(s) => s.clone(),
+            t => panic!("Term {t} should be of type String"),
+        })
+        .collect()
+}
+
 fn add_cookie(
     biscuit: &Biscuit,
     cookies: &CookieJar<'_>,
@@ -488,7 +519,7 @@ fn add_cookie(
             );
         },
         Err(err) => {
-            error!("Error setting token cookie: {}", err);
+            error(format!("Error setting token cookie: {err}"));
         },
     }
 }
@@ -564,7 +595,7 @@ impl<'r> Responder<'r, 'static> for Error {
         self,
         _: &'r Request<'_>,
     ) -> response::Result<'static> {
-        error!("{self}");
+        error(format!("{self}"));
         Err(Status::InternalServerError)
     }
 }
@@ -596,6 +627,11 @@ impl fmt::Display for Error {
 }
 
 impl std::error::Error for Error {}
+
+fn error(err: String) {
+    ERRORS.lock().unwrap().push((Utc::now(), err.to_owned()));
+    error!(err);
+}
 
 #[cfg(test)]
 mod tests {
