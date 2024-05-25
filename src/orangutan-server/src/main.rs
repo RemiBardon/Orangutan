@@ -295,12 +295,16 @@ fn update_content_github() -> Result<(), Error> {
     pull_repository().map_err(Error::CannotPullOutdatedRepository)?;
 
     // Remove outdated websites
-    remove_outdated_websites().map_err(Error::CannotDeleteOutdatedWebsites)?;
+    let state = trash_outdated_websites().map_err(Error::CannotTrashOutdatedWebsites)?;
 
     // Pre-generate default website as we will access it at some point anyway
-    generate_default_website().map_err(Error::WebsiteGenerationError)?;
-
-    Ok(())
+    match generate_default_website().map_err(Error::WebsiteGenerationError) {
+        Err(err) => {
+            error!("{err}");
+            recover_trash(state).map_err(Error::CannotRecoverTrash)
+        },
+        Ok(()) => empty_trash(state).map_err(Error::CannotEmptyTrash),
+    }
 }
 
 #[post("/update-content/<source>")]
@@ -546,7 +550,9 @@ fn add_padding(base64_string: &str) -> String {
 enum Error {
     WebsiteGenerationError(generate::Error),
     CannotPullOutdatedRepository(generate::Error),
-    CannotDeleteOutdatedWebsites(generate::Error),
+    CannotTrashOutdatedWebsites(generate::Error),
+    CannotRecoverTrash(generate::Error),
+    CannotEmptyTrash(generate::Error),
 }
 
 impl fmt::Display for Error {
@@ -559,8 +565,14 @@ impl fmt::Display for Error {
             Error::CannotPullOutdatedRepository(err) => {
                 write!(f, "Cannot pull outdated repository: {err}")
             },
-            Error::CannotDeleteOutdatedWebsites(err) => {
-                write!(f, "Cannot delete outdated websites: {err}")
+            Error::CannotTrashOutdatedWebsites(err) => {
+                write!(f, "Cannot trash outdated websites: {err}")
+            },
+            Error::CannotRecoverTrash(err) => {
+                write!(f, "Cannot recover trash: {err}")
+            },
+            Error::CannotEmptyTrash(err) => {
+                write!(f, "Cannot empty trash: {err}")
             },
         }
     }

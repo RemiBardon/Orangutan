@@ -24,6 +24,7 @@ static DATA_FILES_GENERATED: AtomicBool = AtomicBool::new(false);
 lazy_static! {
     // NOTE: `Arc` prevents race conditions
     static ref GENERATED_WEBSITES: Arc<Mutex<HashSet<PathBuf>>> = Arc::new(Mutex::new(HashSet::new()));
+    static ref TMP_DIR: PathBuf = std::env::temp_dir().join("orangutan-save");
 }
 
 pub fn generate_default_website() -> Result<(), Error> {
@@ -341,15 +342,56 @@ fn empty_index_json(website_dir: &PathBuf) -> Result<(), io::Error> {
     Ok(())
 }
 
-pub fn remove_outdated_websites() -> Result<(), Error> {
+pub struct State {
+    hugo_config_generated: bool,
+    data_files_generated: bool,
+    generated_websites: HashSet<PathBuf>,
+    used_profiles: Option<&'static HashSet<String>>,
+}
+
+pub fn trash_outdated_websites() -> Result<State, Error> {
+    trace!("Trashing outdated websites…");
+
     // Remove outdated websites
-    fs::remove_dir_all(DEST_DIR.as_path()).map_err(Error::CannotDeleteOutdatedWebsites)?;
+    fs::rename(DEST_DIR.as_path(), TMP_DIR.as_path()).map_err(Error::IOError)?;
+
+    // Save caches (in case we need to recover)
+    let state = State {
+        hugo_config_generated: HUGO_CONFIG_GENERATED.load(Ordering::Relaxed),
+        data_files_generated: DATA_FILES_GENERATED.load(Ordering::Relaxed),
+        generated_websites: GENERATED_WEBSITES.lock().unwrap().to_owned(),
+        used_profiles: super::USED_PROFILES.lock().unwrap().to_owned(),
+    };
 
     // Clear caches
     HUGO_CONFIG_GENERATED.store(false, Ordering::Relaxed);
     DATA_FILES_GENERATED.store(false, Ordering::Relaxed);
     GENERATED_WEBSITES.lock().unwrap().clear();
     *super::USED_PROFILES.lock().unwrap() = None;
+
+    Ok(state)
+}
+
+pub fn recover_trash(state: State) -> Result<(), Error> {
+    trace!("Recovering trash…");
+
+    // Reload files
+    fs::rename(TMP_DIR.as_path(), DEST_DIR.as_path()).map_err(Error::IOError)?;
+
+    // Relaod caches
+    HUGO_CONFIG_GENERATED.store(state.hugo_config_generated, Ordering::Relaxed);
+    DATA_FILES_GENERATED.store(state.data_files_generated, Ordering::Relaxed);
+    *GENERATED_WEBSITES.lock().unwrap() = state.generated_websites;
+    *super::USED_PROFILES.lock().unwrap() = state.used_profiles;
+
+    Ok(())
+}
+
+/// NOTE: Needs a `State` to take ownership and make sure we don't keep outdated information.
+pub fn empty_trash(_state: State) -> Result<(), Error> {
+    trace!("Emptying trash…");
+
+    fs::remove_dir_all(TMP_DIR.as_path()).map_err(Error::IOError)?;
 
     Ok(())
 }
@@ -361,7 +403,7 @@ pub enum Error {
     CannotGenerateWebsite(Box<Error>),
     CannotEmptyIndexJson(io::Error),
     CannotCreateHugoConfigFile(io::Error),
-    CannotDeleteOutdatedWebsites(io::Error),
+    IOError(io::Error),
 }
 
 impl fmt::Display for Error {
@@ -383,9 +425,7 @@ impl fmt::Display for Error {
             Error::CannotCreateHugoConfigFile(err) => {
                 write!(f, "Could create hugo config file: {err}")
             },
-            Error::CannotDeleteOutdatedWebsites(err) => {
-                write!(f, "Cannot delete outdated websites: {err}")
-            },
+            Error::IOError(err) => write!(f, "IO error: {err}"),
         }
     }
 }
