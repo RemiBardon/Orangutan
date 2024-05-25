@@ -21,7 +21,7 @@ static DATA_FILES_GENERATED: AtomicBool = AtomicBool::new(false);
 lazy_static! {
     // NOTE: `Arc` prevents race conditions
     static ref GENERATED_WEBSITES: Arc<Mutex<HashSet<PathBuf>>> = Arc::new(Mutex::new(HashSet::new()));
-    static ref TMP_DIR: PathBuf = std::env::temp_dir().join("orangutan-save");
+    static ref TRASH_DIR: PathBuf = TMP_DIR.join("trash");
 }
 
 pub fn generate_default_website() -> Result<(), Error> {
@@ -350,7 +350,7 @@ pub fn trash_outdated_websites() -> Result<State, Error> {
     trace!("Trashing outdated websites…");
 
     // Remove outdated websites
-    fs::rename(DEST_DIR.as_path(), TMP_DIR.as_path()).map_err(Error::IOError)?;
+    fs::rename(DEST_DIR.as_path(), TRASH_DIR.as_path()).map_err(Error::IOError)?;
 
     // Save caches (in case we need to recover)
     let state = State {
@@ -373,7 +373,7 @@ pub fn recover_trash(state: State) -> Result<(), Error> {
     trace!("Recovering trash…");
 
     // Reload files
-    fs::rename(TMP_DIR.as_path(), DEST_DIR.as_path()).map_err(Error::IOError)?;
+    fs::rename(TRASH_DIR.as_path(), DEST_DIR.as_path()).map_err(Error::IOError)?;
 
     // Relaod caches
     HUGO_CONFIG_GENERATED.store(state.hugo_config_generated, Ordering::Relaxed);
@@ -388,7 +388,7 @@ pub fn recover_trash(state: State) -> Result<(), Error> {
 pub fn empty_trash(_state: State) -> Result<(), Error> {
     trace!("Emptying trash…");
 
-    fs::remove_dir_all(TMP_DIR.as_path()).map_err(Error::IOError)?;
+    fs::remove_dir_all(TRASH_DIR.as_path()).map_err(Error::IOError)?;
 
     Ok(())
 }

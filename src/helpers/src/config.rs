@@ -17,6 +17,7 @@ lazy_static! {
     pub static ref WEBSITE_REPOSITORY: String = env::var("WEBSITE_REPOSITORY")
         .expect("Environment variable `WEBSITE_REPOSITORY` is required.");
     pub static ref BASE_DIR: PathBuf = WORK_DIR.join(".orangutan");
+    pub static ref TMP_DIR: PathBuf = BASE_DIR.join("tmp");
     pub static ref KEYS_DIR: PathBuf = BASE_DIR.join("keys");
     pub static ref MODE: Result<String, env::VarError> = env::var("MODE");
     pub static ref KEYS_MODE: Result<String, env::VarError> = env::var("KEYS_MODE");
