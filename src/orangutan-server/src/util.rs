@@ -10,7 +10,7 @@ use tracing::error;
 use crate::{config::TOKEN_COOKIE_NAME, routes::debug_routes::ERRORS};
 
 pub fn error(err: String) {
-    ERRORS.lock().unwrap().push((Utc::now(), err.to_owned()));
+    ERRORS.write().unwrap().push((Utc::now(), err.to_owned()));
     error!(err);
 }
 

@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 
 use chrono::{DateTime, Utc};
 use lazy_static::lazy_static;
@@ -15,7 +15,7 @@ lazy_static! {
     /// without having to open the cloud hosting provider's logs.
     ///
     /// // NOTE: `Arc` prevents race conditions
-    pub(crate) static ref ERRORS: Arc<Mutex<Vec<(DateTime<Utc>, String)>>> = Arc::default();
+    pub(crate) static ref ERRORS: Arc<RwLock<Vec<(DateTime<Utc>, String)>>> = Arc::default();
 }
 
 pub(super) fn routes() -> Vec<Route> {
@@ -50,7 +50,7 @@ fn get_user_info(token: Option<Token>) -> String {
 fn errors(token: Token) -> Result<String, Status> {
     if token.profiles().contains(&"*".to_owned()) {
         Ok(ERRORS
-            .lock()
+            .read()
             .unwrap()
             .iter()
             .map(|(d, l)| format!("{d} | {l}"))
