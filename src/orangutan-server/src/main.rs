@@ -18,8 +18,7 @@ use rocket::{
     Request,
 };
 use routes::{main_route, update_content_routes};
-use tracing::Level;
-use tracing_subscriber::FmtSubscriber;
+use tracing_subscriber::{EnvFilter, FmtSubscriber};
 use util::error;
 
 use crate::config::NOT_FOUND_FILE;
@@ -33,7 +32,7 @@ fn rocket() -> _ {
         .attach(AdHoc::on_liftoff("Tracing subsciber", |_| {
             Box::pin(async move {
                 let subscriber = FmtSubscriber::builder()
-                    .with_max_level(Level::TRACE)
+                    .with_env_filter(EnvFilter::from_default_env())
                     .finish();
                 tracing::subscriber::set_global_default(subscriber)
                     .expect("Failed to set tracing subscriber.");
