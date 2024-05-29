@@ -9,5 +9,6 @@ edition = "2021"
 biscuit-auth = "4"
 iso8601-duration = "0.2"
 lazy_static = "1"
+thiserror = "1"
 tracing = "0.1"
 orangutan-helpers = { path = "../helpers" }

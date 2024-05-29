@@ -1,4 +1,3 @@
-use core::fmt;
 use std::collections::HashSet;
 use std::env;
 use std::fs::{self, File};
@@ -350,7 +349,7 @@ pub fn trash_outdated_websites() -> Result<State, Error> {
     trace!("Trashing outdated websites…");
 
     // Remove outdated websites
-    fs::rename(DEST_DIR.as_path(), TRASH_DIR.as_path()).map_err(Error::IOError)?;
+    fs::rename(DEST_DIR.as_path(), TRASH_DIR.as_path())?;
 
     // Save caches (in case we need to recover)
     let state = State {
@@ -373,7 +372,7 @@ pub fn recover_trash(state: State) -> Result<(), Error> {
     trace!("Recovering trash…");
 
     // Reload files
-    fs::rename(TRASH_DIR.as_path(), DEST_DIR.as_path()).map_err(Error::IOError)?;
+    fs::rename(TRASH_DIR.as_path(), DEST_DIR.as_path())?;
 
     // Relaod caches
     HUGO_CONFIG_GENERATED.store(state.hugo_config_generated, Ordering::Relaxed);
@@ -388,41 +387,23 @@ pub fn recover_trash(state: State) -> Result<(), Error> {
 pub fn empty_trash(_state: State) -> Result<(), Error> {
     trace!("Emptying trash…");
 
-    fs::remove_dir_all(TRASH_DIR.as_path()).map_err(Error::IOError)?;
+    fs::remove_dir_all(TRASH_DIR.as_path())?;
 
     Ok(())
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("Could not execute command `{0}`: {1}")]
     CannotExecuteCommand(String, io::Error),
+    #[error("Command `{command}` failed with exit code {code:?}")]
     CommandExecutionFailed { command: String, code: Option<i32> },
+    #[error("Could not generate website: {0}")]
     CannotGenerateWebsite(Box<Error>),
+    #[error("Could not empty <index.json> file: {0}")]
     CannotEmptyIndexJson(io::Error),
+    #[error("Could create hugo config file: {0}")]
     CannotCreateHugoConfigFile(io::Error),
-    IOError(io::Error),
-}
-
-impl fmt::Display for Error {
-    fn fmt(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-    ) -> fmt::Result {
-        match self {
-            Error::CannotExecuteCommand(command, err) => {
-                write!(f, "Could not execute command `{command}`: {err}")
-            },
-            Error::CommandExecutionFailed { command, code } => {
-                write!(f, "Command `{command}` failed with exit code {:?}", code)
-            },
-            Error::CannotGenerateWebsite(err) => write!(f, "Could not generate website: {err}"),
-            Error::CannotEmptyIndexJson(err) => {
-                write!(f, "Could not empty <index.json> file: {err}")
-            },
-            Error::CannotCreateHugoConfigFile(err) => {
-                write!(f, "Could create hugo config file: {err}")
-            },
-            Error::IOError(err) => write!(f, "IO error: {err}"),
-        }
-    }
+    #[error("IO error: {0}")]
+    IOError(#[from] io::Error),
 }

@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::{fmt, fs, io};
+use std::{fs, io};
 
 use rocket::fs::NamedFile;
 use rocket::response::Responder;
@@ -99,18 +99,8 @@ fn find(
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("Website generation error: {0}")]
     WebsiteGenerationError(generate::Error),
-}
-
-impl fmt::Display for Error {
-    fn fmt(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-    ) -> fmt::Result {
-        match self {
-            Error::WebsiteGenerationError(err) => write!(f, "Website generation error: {err}"),
-        }
-    }
 }

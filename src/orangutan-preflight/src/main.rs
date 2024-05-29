@@ -1,4 +1,3 @@
-use core::fmt;
 use std::process::exit;
 
 use orangutan_helpers::generate::{self, *};
@@ -43,22 +42,10 @@ pub fn throwing_main() -> Result<(), Error> {
 //     }
 // }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("Website generation error: {0}")]
     WebsiteGenerationError(generate::Error),
+    #[error("Could not generate data files: {0}")]
     CannotGenerateDataFiles(generate::Error),
-}
-
-impl fmt::Display for Error {
-    fn fmt(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-    ) -> fmt::Result {
-        match self {
-            Error::WebsiteGenerationError(err) => write!(f, "Website generation error: {err}"),
-            Error::CannotGenerateDataFiles(err) => {
-                write!(f, "Could not generate data files: {err}")
-            },
-        }
-    }
 }

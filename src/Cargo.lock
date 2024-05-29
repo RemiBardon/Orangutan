@@ -985,6 +985,7 @@ dependencies = [
  "lazy_static",
  "rocket",
  "serde_json",
+ "thiserror",
  "tracing",
 ]
 
@@ -997,6 +998,7 @@ name = "orangutan-preflight"
 version = "0.1.0"
 dependencies = [
  "orangutan-helpers",
+ "thiserror",
  "tracing",
  "tracing-subscriber",
 ]
@@ -1009,6 +1011,7 @@ dependencies = [
  "iso8601-duration",
  "lazy_static",
  "orangutan-helpers",
+ "thiserror",
  "tracing",
 ]
 
@@ -1023,6 +1026,7 @@ dependencies = [
  "orangutan-helpers",
  "rocket",
  "serde_json",
+ "thiserror",
  "time",
  "tracing",
  "tracing-subscriber",

@@ -1,7 +1,7 @@
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::{env, fmt, io};
+use std::{env, io};
 
 use crate::config::{KEYS_DIR, ROOT_KEY_NAME};
 
@@ -38,13 +38,9 @@ impl KeysReader for EnvKeysReader {
             key_name,
             env_var_name
         );
-        env::var(env_var_name)
-            .map_err(Error::Env)
-            .and_then(|key_bytes| {
-                let key = biscuit::PrivateKey::from_bytes_hex(&key_bytes)
-                    .map_err(Error::BiscuitFormat)?;
-                Ok(biscuit::KeyPair::from(&key))
-            })
+        let key_bytes = env::var(env_var_name)?;
+        let key = biscuit::PrivateKey::from_bytes_hex(&key_bytes)?;
+        Ok(biscuit::KeyPair::from(&key))
     }
 }
 
@@ -68,11 +64,10 @@ impl KeysReader for LocalKeysReader {
         if key_file.exists() {
             // If key file exists, read the file
             trace!("Reading key '{}' from <{}>…", key_name, key_file.display());
-            let mut file = File::open(key_file).map_err(Error::IO)?;
+            let mut file = File::open(key_file)?;
             let mut key_bytes = String::new();
-            file.read_to_string(&mut key_bytes).map_err(Error::IO)?;
-            let key =
-                biscuit::PrivateKey::from_bytes_hex(&key_bytes).map_err(Error::BiscuitFormat)?;
+            file.read_to_string(&mut key_bytes)?;
+            let key = biscuit::PrivateKey::from_bytes_hex(&key_bytes)?;
             Ok(biscuit::KeyPair::from(&key))
         } else {
             // If key file does not exist, create a new key and save it to a new file
@@ -82,46 +77,27 @@ impl KeysReader for LocalKeysReader {
                 key_file.display()
             );
             let key_pair = biscuit::KeyPair::new();
-            let mut file = File::create(&key_file).map_err(Error::IO)?;
-            file.write_all(key_pair.private().to_bytes_hex().as_bytes())
-                .map_err(Error::IO)?;
+            let mut file = File::create(&key_file)?;
+            file.write_all(key_pair.private().to_bytes_hex().as_bytes())?;
             Ok(key_pair)
         }
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum Error {
-    Env(env::VarError),
-    IO(io::Error),
+    #[error("Env error: {0}")]
+    Env(#[from] env::VarError),
+    #[error("IO error: {0}")]
+    IO(#[from] io::Error),
+    #[error("Could not create <{}> file: {1}", .0.display())]
     CannotCreateFile(PathBuf, io::Error),
+    #[error("Could not open <{}> file: {1}", .0.display())]
     CannotOpenFile(PathBuf, io::Error),
+    #[error("Could not write in <{}> file: {1}", .0.display())]
     CannotWriteInFile(PathBuf, io::Error),
+    #[error("Could not read <{}> file: {1}", .0.display())]
     CannotReadFile(PathBuf, io::Error),
-    BiscuitFormat(biscuit::error::Format),
-}
-
-impl fmt::Display for Error {
-    fn fmt(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-    ) -> fmt::Result {
-        match self {
-            Error::Env(err) => err.fmt(f),
-            Error::IO(err) => err.fmt(f),
-            Error::CannotCreateFile(path, err) => {
-                write!(f, "Could not create <{}> file: {err}", path.display())
-            },
-            Error::CannotOpenFile(path, err) => {
-                write!(f, "Could not open <{}> file: {err}", path.display())
-            },
-            Error::CannotWriteInFile(path, err) => {
-                write!(f, "Could not write in <{}> file: {err}", path.display())
-            },
-            Error::CannotReadFile(path, err) => {
-                write!(f, "Could not read <{}> file: {err}", path.display())
-            },
-            Error::BiscuitFormat(err) => err.fmt(f),
-        }
-    }
+    #[error("{0}")]
+    BiscuitFormat(#[from] biscuit::error::Format),
 }

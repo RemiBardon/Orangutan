@@ -1,6 +1,5 @@
 mod config;
 
-use std::fmt;
 use std::ops::Deref;
 use std::path::Path;
 use std::process::exit;
@@ -576,16 +575,22 @@ fn add_padding(base64_string: &str) -> String {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 enum Error {
+    #[error("Website generation error: {0}")]
     WebsiteGenerationError(generate::Error),
+    #[error("Cannot pull outdated repository: {0}")]
     CannotPullOutdatedRepository(generate::Error),
+    #[error("Error when listing objects matching '{path}': {err}")]
     CannotListObjects {
         path: String,
         err: object_reader::Error,
     },
+    #[error("Cannot trash outdated websites: {0}")]
     CannotTrashOutdatedWebsites(generate::Error),
+    #[error("Cannot recover trash: {0}")]
     CannotRecoverTrash(generate::Error),
+    #[error("Cannot empty trash: {0}")]
     CannotEmptyTrash(generate::Error),
 }
 
@@ -599,34 +604,6 @@ impl<'r> Responder<'r, 'static> for Error {
         Err(Status::InternalServerError)
     }
 }
-
-impl fmt::Display for Error {
-    fn fmt(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-    ) -> fmt::Result {
-        match self {
-            Error::WebsiteGenerationError(err) => write!(f, "Website generation error: {err}"),
-            Error::CannotPullOutdatedRepository(err) => {
-                write!(f, "Cannot pull outdated repository: {err}")
-            },
-            Error::CannotListObjects { path, err } => {
-                write!(f, "Error when listing objects matching '{path}': {err}")
-            },
-            Error::CannotTrashOutdatedWebsites(err) => {
-                write!(f, "Cannot trash outdated websites: {err}")
-            },
-            Error::CannotRecoverTrash(err) => {
-                write!(f, "Cannot recover trash: {err}")
-            },
-            Error::CannotEmptyTrash(err) => {
-                write!(f, "Cannot empty trash: {err}")
-            },
-        }
-    }
-}
-
-impl std::error::Error for Error {}
 
 fn error(err: String) {
     ERRORS.lock().unwrap().push((Utc::now(), err.to_owned()));
