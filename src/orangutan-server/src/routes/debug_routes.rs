@@ -94,15 +94,22 @@ fn access_logs(token: Token) -> Result<String, Status> {
     }
 
     let mut res = String::new();
-    for log in ACCESS_LOGS.read().unwrap().iter() {
-        let mut user = log.user.clone();
-        user.sort();
-        res.push_str(&format!(
-            "{} | {}: {}\n",
-            log.timestamp,
-            user.join(","),
-            log.path
-        ));
+    for AccessLog {
+        timestamp,
+        user,
+        path,
+    } in ACCESS_LOGS.read().unwrap().iter()
+    {
+        let mut profiles = user.clone();
+        // Sort profiles so they are always presented in the same order
+        profiles.sort();
+        let user = if profiles.is_empty() {
+            "?".to_owned()
+        } else {
+            profiles.join(",")
+        };
+
+        res.push_str(&format!("{timestamp} | {user}: {path}\n"));
     }
 
     Ok(res)
