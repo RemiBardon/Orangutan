@@ -1,9 +1,6 @@
-use crate::config::*;
-use crate::used_profiles;
+use std::{collections::HashSet, fmt::Display, path::PathBuf};
 
-use std::collections::HashSet;
-use std::fmt::Display;
-use std::path::PathBuf;
+use crate::{config::*, used_profiles};
 
 pub struct WebsiteId {
     pub profiles: HashSet<String>,

@@ -1,7 +1,10 @@
-use std::fs::File;
-use std::io::{Read, Write};
-use std::path::PathBuf;
-use std::{env, io};
+use std::{
+    env,
+    fs::File,
+    io,
+    io::{Read, Write},
+    path::PathBuf,
+};
 
 use crate::config::{KEYS_DIR, ROOT_KEY_NAME};
 

@@ -1,12 +1,12 @@
-use std::path::PathBuf;
-use std::{fs, io};
+use std::{fs, io, path::PathBuf};
 
-use rocket::fs::NamedFile;
-use rocket::response::Responder;
+use rocket::{fs::NamedFile, response::Responder};
 use tracing::trace;
 
-use crate::generate::{self, generate_website_if_needed};
-use crate::website_id::WebsiteId;
+use crate::{
+    generate::{self, generate_website_if_needed},
+    website_id::WebsiteId,
+};
 
 pub type ObjectReader = LocalObjectReader;
 

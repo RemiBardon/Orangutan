@@ -1,15 +1,20 @@
-use std::fs::File;
-use std::io::{Read, Write};
-use std::path::PathBuf;
-use std::process::exit;
-use std::time::SystemTime;
-use std::{env, io};
+use std::{
+    env,
+    fs::File,
+    io,
+    io::{Read, Write},
+    path::PathBuf,
+    process::exit,
+    time::SystemTime,
+};
 
 use iso8601_duration::Duration as IsoDuration;
 
 extern crate biscuit_auth as biscuit;
-use biscuit::macros::{block, fact};
-use biscuit::Biscuit;
+use biscuit::{
+    macros::{block, fact},
+    Biscuit,
+};
 use lazy_static::lazy_static;
 use orangutan_helpers::config::KEYS_DIR;
 use tracing::{error, trace};

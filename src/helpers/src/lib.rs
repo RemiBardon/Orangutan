@@ -3,11 +3,13 @@ pub mod generate;
 pub mod readers;
 pub mod website_id;
 
-use std::collections::HashSet;
-use std::fs::{self, File};
-use std::io;
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::HashSet,
+    fs::{self, File},
+    io,
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
+};
 
 use lazy_static::lazy_static;
 use serde_json::Value;
@@ -16,7 +18,8 @@ use tracing::{debug, error, trace};
 use crate::config::*;
 
 lazy_static! {
-    static ref USED_PROFILES: Arc<Mutex<Option<&'static HashSet<String>>>> = Arc::new(Mutex::new(None));
+    static ref USED_PROFILES: Arc<Mutex<Option<&'static HashSet<String>>>> =
+        Arc::new(Mutex::new(None));
 }
 
 pub fn used_profiles<'a>() -> &'a HashSet<String> {

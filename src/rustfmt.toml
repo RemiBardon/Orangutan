@@ -1,6 +1,6 @@
 array_width = 48
 fn_params_layout = "Vertical"
 group_imports = "StdExternalCrate"
-imports_granularity = "Module"
+imports_granularity = "Crate"
 match_block_trailing_comma = true
 overflow_delimited_expr = true

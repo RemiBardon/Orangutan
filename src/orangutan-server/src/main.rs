@@ -1,32 +1,41 @@
 mod config;
 
-use std::ops::Deref;
-use std::path::Path;
-use std::process::exit;
-use std::sync::{Arc, Mutex};
-use std::time::SystemTime;
+use std::{
+    ops::Deref,
+    path::Path,
+    process::exit,
+    sync::{Arc, Mutex},
+    time::SystemTime,
+};
 
-use biscuit::builder::{Fact, Term};
-use biscuit::macros::authorizer;
-use biscuit::Biscuit;
+use biscuit::{
+    builder::{Fact, Term},
+    macros::authorizer,
+    Biscuit,
+};
 use biscuit_auth as biscuit;
 use chrono::{DateTime, Utc};
 use lazy_static::lazy_static;
 use object_reader::{ObjectReader, ReadObjectResponse};
-use orangutan_helpers::generate::{self, *};
-use orangutan_helpers::readers::keys_reader::*;
-use orangutan_helpers::readers::object_reader;
-use orangutan_helpers::website_id::WebsiteId;
-use orangutan_helpers::{data_file, read_allowed};
-use rocket::fairing::AdHoc;
-use rocket::fs::NamedFile;
-use rocket::http::uri::Origin;
-use rocket::http::{Cookie, CookieJar, SameSite, Status};
-use rocket::outcome::Outcome;
-use rocket::request::FromRequest;
-use rocket::response::status::BadRequest;
-use rocket::response::{self, Redirect, Responder};
-use rocket::{catch, catchers, get, post, request, routes, Request, State};
+use orangutan_helpers::{
+    data_file,
+    generate::{self, *},
+    read_allowed,
+    readers::{keys_reader::*, object_reader},
+    website_id::WebsiteId,
+};
+use rocket::{
+    catch, catchers,
+    fairing::AdHoc,
+    fs::NamedFile,
+    get,
+    http::{uri::Origin, Cookie, CookieJar, SameSite, Status},
+    outcome::Outcome,
+    post, request,
+    request::FromRequest,
+    response::{self, status::BadRequest, Redirect, Responder},
+    routes, Request, State,
+};
 use time::Duration;
 use tracing::{debug, error, trace, Level};
 use tracing_subscriber::FmtSubscriber;

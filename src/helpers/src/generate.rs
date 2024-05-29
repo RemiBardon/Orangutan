@@ -1,18 +1,20 @@
-use std::collections::HashSet;
-use std::env;
-use std::fs::{self, File};
-use std::io::{self, Write};
-use std::path::PathBuf;
-use std::process::{Command, Output, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::{
+    collections::HashSet,
+    env,
+    fs::{self, File},
+    io::{self, Write},
+    path::PathBuf,
+    process::{Command, Output, Stdio},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex, MutexGuard,
+    },
+};
 
 use lazy_static::lazy_static;
 use tracing::{debug, info, trace};
 
-use crate::config::*;
-use crate::copy_directory;
-use crate::website_id::*;
+use crate::{config::*, copy_directory, website_id::*};
 
 static HUGO_CONFIG_GENERATED: AtomicBool = AtomicBool::new(false);
 static DATA_FILES_GENERATED: AtomicBool = AtomicBool::new(false);

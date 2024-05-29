@@ -1,8 +1,10 @@
 use std::process::exit;
 
-use orangutan_helpers::generate::{self, *};
-use orangutan_helpers::used_profiles;
-use orangutan_helpers::website_id::WebsiteId;
+use orangutan_helpers::{
+    generate::{self, *},
+    used_profiles,
+    website_id::WebsiteId,
+};
 use tracing::{debug, error, Level};
 use tracing_subscriber::FmtSubscriber;
 
