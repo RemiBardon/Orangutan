@@ -347,6 +347,13 @@ pub struct State {
     used_profiles: Option<&'static HashSet<String>>,
 }
 
+pub fn create_tmp_dir() -> Result<(), Error> {
+    trace!("Creating temporary directory at <{}>…", TMP_DIR.display());
+    fs::create_dir_all(TMP_DIR.as_path())?;
+
+    Ok(())
+}
+
 pub fn trash_outdated_websites() -> Result<State, Error> {
     trace!("Trashing outdated websites…");
 

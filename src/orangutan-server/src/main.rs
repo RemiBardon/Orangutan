@@ -50,8 +50,9 @@ fn rocket() -> _ {
 }
 
 fn liftoff() -> Result<(), Error> {
-    clone_repository().map_err(Error::WebsiteGenerationError)?;
-    generate_default_website().map_err(Error::WebsiteGenerationError)?;
+    create_tmp_dir()?;
+    clone_repository()?;
+    generate_default_website()?;
     Ok(())
 }
 
@@ -85,8 +86,8 @@ async fn not_found() -> Result<NamedFile, &'static str> {
 
 #[derive(Debug, thiserror::Error)]
 enum Error {
-    #[error("Website generation error: {0}")]
-    WebsiteGenerationError(generate::Error),
+    #[error(transparent)]
+    WebsiteGenerationError(#[from] generate::Error),
     #[error(transparent)]
     MainRouteError(#[from] main_route::Error),
     #[error("Could not update content: {0}")]
