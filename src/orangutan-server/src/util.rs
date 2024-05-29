@@ -7,10 +7,16 @@ use rocket::http::{Cookie, CookieJar, SameSite};
 use time::Duration;
 use tracing::error;
 
-use crate::{config::TOKEN_COOKIE_NAME, routes::debug_routes::ERRORS};
+use crate::{
+    config::TOKEN_COOKIE_NAME,
+    routes::debug_routes::{ErrorLog, ERRORS},
+};
 
 pub fn error(err: String) {
-    ERRORS.write().unwrap().push((Utc::now(), err.to_owned()));
+    ERRORS.write().unwrap().push(ErrorLog {
+        timestamp: Utc::now(),
+        line: err.to_owned(),
+    });
     error!(err);
 }
 

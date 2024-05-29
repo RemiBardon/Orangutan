@@ -1,4 +1,7 @@
-use std::sync::{Arc, RwLock};
+use std::{
+    fmt::Display,
+    sync::{Arc, RwLock},
+};
 
 use chrono::{DateTime, Utc};
 use lazy_static::lazy_static;
@@ -15,7 +18,7 @@ lazy_static! {
     /// without having to open the cloud hosting provider's logs.
     ///
     /// // NOTE: `Arc` prevents race conditions
-    pub(crate) static ref ERRORS: Arc<RwLock<Vec<(DateTime<Utc>, String)>>> = Arc::default();
+    pub(crate) static ref ERRORS: Arc<RwLock<Vec<ErrorLog>>> = Arc::default();
 }
 
 pub(super) fn routes() -> Vec<Route> {
@@ -46,17 +49,31 @@ fn get_user_info(token: Option<Token>) -> String {
     }
 }
 
+pub struct ErrorLog {
+    pub timestamp: DateTime<Utc>,
+    pub line: String,
+}
+
+impl Display for ErrorLog {
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        write!(f, "{} | {}", self.timestamp, self.line)
+    }
+}
+
 #[get("/_errors")]
 fn errors(token: Token) -> Result<String, Status> {
-    if token.profiles().contains(&"*".to_owned()) {
-        Ok(ERRORS
-            .read()
-            .unwrap()
-            .iter()
-            .map(|(d, l)| format!("{d} | {l}"))
-            .collect::<Vec<_>>()
-            .join("\n"))
-    } else {
-        Err(Status::Unauthorized)
+    if !token.profiles().contains(&"*".to_owned()) {
+        Err(Status::Unauthorized)?
     }
+
+    Ok(ERRORS
+        .read()
+        .unwrap()
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n"))
 }
