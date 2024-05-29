@@ -6,9 +6,9 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-biscuit-auth = "4"
-iso8601-duration = "0.2"
-lazy_static = "1"
-thiserror = "1"
-tracing = "0.1"
+biscuit-auth = { workspace = true }
+iso8601-duration = { workspace = true }
+lazy_static = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
 orangutan-helpers = { path = "../helpers" }
