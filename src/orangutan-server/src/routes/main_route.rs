@@ -3,10 +3,14 @@ use std::{path::Path, time::SystemTime};
 use biscuit_auth::macros::authorizer;
 use object_reader::{ObjectReader, ReadObjectResponse};
 use orangutan_helpers::{data_file, read_allowed, readers::object_reader, website_id::WebsiteId};
-use rocket::{get, http::uri::Origin, routes, Route, State};
+use rocket::{
+    get,
+    http::{uri::Origin, Accept},
+    routes, Route, State,
+};
 use tracing::{debug, trace};
 
-use crate::{config::*, request_guards::Token, util::error};
+use crate::{config::*, request_guards::Token, routes::debug_routes::log_access, util::error};
 
 pub(super) fn routes() -> Vec<Route> {
     routes![handle_request]
@@ -17,6 +21,7 @@ async fn handle_request(
     origin: &Origin<'_>,
     token: Option<Token>,
     object_reader: &State<ObjectReader>,
+    accept: Option<&Accept>,
 ) -> Result<Option<ReadObjectResponse>, crate::Error> {
     // FIXME: Handle error
     let path = urlencoding::decode(origin.path().as_str())
@@ -27,6 +32,13 @@ async fn handle_request(
     let user_profiles: Vec<String> = token.as_ref().map(Token::profiles).unwrap_or_default();
     debug!("User has profiles {user_profiles:?}");
     let website_id = WebsiteId::from(&user_profiles);
+
+    // Log access only if the page is HTML.
+    // WARN: This solution is far from perfect as someone requesting a page without setting the `Accept` header
+    //   would not be logged even though they'd get the file back.
+    if accept.is_some_and(|a| a.media_types().find(|t| t.is_html()).is_some()) {
+        log_access(user_profiles.to_owned(), path.to_owned());
+    }
 
     let stored_objects: Vec<String> =
         object_reader

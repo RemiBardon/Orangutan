@@ -1,7 +1,4 @@
-use std::{
-    fmt::Display,
-    sync::{Arc, RwLock},
-};
+use std::sync::{Arc, RwLock};
 
 use chrono::{DateTime, Utc};
 use lazy_static::lazy_static;
@@ -19,10 +16,19 @@ lazy_static! {
     ///
     /// // NOTE: `Arc` prevents race conditions
     pub(crate) static ref ERRORS: Arc<RwLock<Vec<ErrorLog>>> = Arc::default();
+    /// Access logs, per "user".
+    ///
+    /// // NOTE: `Arc` prevents race conditions
+    pub(crate) static ref ACCESS_LOGS: Arc<RwLock<Vec<AccessLog>>> = Arc::default();
 }
 
 pub(super) fn routes() -> Vec<Route> {
-    routes![clear_cookies, get_user_info, errors]
+    routes![
+        clear_cookies,
+        get_user_info,
+        errors,
+        access_logs
+    ]
 }
 
 #[get("/clear-cookies")]
@@ -54,26 +60,61 @@ pub struct ErrorLog {
     pub line: String,
 }
 
-impl Display for ErrorLog {
-    fn fmt(
-        &self,
-        f: &mut std::fmt::Formatter<'_>,
-    ) -> std::fmt::Result {
-        write!(f, "{} | {}", self.timestamp, self.line)
-    }
-}
-
 #[get("/_errors")]
 fn errors(token: Token) -> Result<String, Status> {
     if !token.profiles().contains(&"*".to_owned()) {
         Err(Status::Unauthorized)?
     }
 
-    Ok(ERRORS
-        .read()
-        .unwrap()
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>()
-        .join("\n"))
+    let mut res = String::new();
+    for log in ERRORS.read().unwrap().iter() {
+        res.push_str(&format!("{} | {}", log.timestamp, log.line));
+    }
+
+    Ok(res)
+}
+
+/// In Orangutan, users are a list of profiles.
+///
+/// NOTE: One day we will introduce `user` facts in Biscuit tokens
+///   to differenciate the unique name from profiles.
+///   That day we will change this type to just `String`.
+type User = Vec<String>;
+
+pub struct AccessLog {
+    pub timestamp: DateTime<Utc>,
+    pub user: User,
+    pub path: String,
+}
+
+#[get("/_access-logs")]
+fn access_logs(token: Token) -> Result<String, Status> {
+    if !token.profiles().contains(&"*".to_owned()) {
+        Err(Status::Unauthorized)?
+    }
+
+    let mut res = String::new();
+    for log in ACCESS_LOGS.read().unwrap().iter() {
+        let mut user = log.user.clone();
+        user.sort();
+        res.push_str(&format!(
+            "{} | {}: {}\n",
+            log.timestamp,
+            user.join(","),
+            log.path
+        ));
+    }
+
+    Ok(res)
+}
+
+pub fn log_access(
+    user: User,
+    path: String,
+) {
+    ACCESS_LOGS.write().unwrap().push(AccessLog {
+        timestamp: Utc::now(),
+        user,
+        path,
+    })
 }
