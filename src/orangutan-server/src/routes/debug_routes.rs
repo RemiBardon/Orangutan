@@ -68,7 +68,7 @@ fn errors(token: Token) -> Result<String, Status> {
 
     let mut res = String::new();
     for log in ERRORS.read().unwrap().iter() {
-        res.push_str(&format!("{} | {}", log.timestamp, log.line));
+        res.push_str(&format!("{} | {}\n", log.timestamp, log.line));
     }
 
     Ok(res)
