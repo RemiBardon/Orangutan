@@ -7,14 +7,14 @@ edition = "2021"
 
 [dependencies]
 base64 = { workspace = true }
-chrono = { workspace = true }
-urlencoding = { workspace = true }
 biscuit-auth = { workspace = true }
+chrono = { workspace = true }
 lazy_static = { workspace = true }
 orangutan-helpers = { path = "../helpers" }
+rocket = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 time = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-rocket = { workspace = true }
+urlencoding = { workspace = true }

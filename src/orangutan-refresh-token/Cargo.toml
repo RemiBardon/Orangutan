@@ -9,6 +9,6 @@ edition = "2021"
 biscuit-auth = { workspace = true }
 iso8601-duration = { workspace = true }
 lazy_static = { workspace = true }
+orangutan-helpers = { path = "../helpers" }
 thiserror = { workspace = true }
 tracing = { workspace = true }
-orangutan-helpers = { path = "../helpers" }
