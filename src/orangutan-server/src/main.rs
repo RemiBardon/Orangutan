@@ -17,15 +17,22 @@ use rocket::{
     response::{self, Responder},
     Request,
 };
-use routes::{main_route, update_content_routes};
+#[cfg(feature = "templating")]
+use tracing::debug;
+use tracing::warn;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
-use util::error;
 
-use crate::config::NOT_FOUND_FILE;
+#[cfg(feature = "templating")]
+use crate::util::templating;
+use crate::{
+    config::NOT_FOUND_FILE,
+    routes::{main_route, update_content_routes},
+    util::error,
+};
 
 #[rocket::launch]
 fn rocket() -> _ {
-    rocket::build()
+    let rocket = rocket::build()
         .mount("/", routes::routes())
         .register("/", catchers![unauthorized, not_found])
         .manage(ObjectReader::new())
@@ -45,7 +52,23 @@ fn rocket() -> _ {
                     rocket.shutdown().notify();
                 }
             })
-        }))
+        }));
+
+    // Add support for templating if needed
+    #[cfg(feature = "templating")]
+    let rocket = rocket.attach(AdHoc::on_ignite(
+        "Initialize templating engine",
+        |rocket| async move {
+            let mut tera = tera::Tera::default();
+            if let Err(err) = tera.add_raw_templates(routes::templates()) {
+                tracing::error!("{err}");
+                std::process::exit(1)
+            }
+            rocket.manage(tera)
+        },
+    ));
+
+    rocket
 }
 
 fn liftoff() -> Result<(), Error> {
@@ -91,6 +114,17 @@ enum Error {
     MainRouteError(#[from] main_route::Error),
     #[error("Could not update content: {0}")]
     UpdateContentError(#[from] update_content_routes::Error),
+    #[error("Unauthorized")]
+    Unauthorized,
+    #[cfg(feature = "templating")]
+    #[error("Templating error: {0}")]
+    TemplatingError(#[from] templating::Error),
+    #[cfg(feature = "templating")]
+    #[error("Internal server error: {0}")]
+    InternalServerError(String),
+    #[cfg(feature = "templating")]
+    #[error("Client error: {0}")]
+    ClientError(String),
 }
 
 #[rocket::async_trait]
@@ -99,7 +133,38 @@ impl<'r> Responder<'r, 'static> for Error {
         self,
         _: &'r Request<'_>,
     ) -> response::Result<'static> {
-        error(format!("{self}"));
-        Err(Status::InternalServerError)
+        match self {
+            Self::Unauthorized => {
+                warn!("{self}");
+                Err(Status::Unauthorized)
+            },
+            #[cfg(feature = "templating")]
+            Self::ClientError(_) => {
+                debug!("{self}");
+                Err(Status::BadRequest)
+            },
+            _ => {
+                error(format!("{self}"));
+                Err(Status::InternalServerError)
+            },
+        }
+    }
+}
+
+#[cfg(feature = "templating")]
+impl From<orangutan_refresh_token::Error> for Error {
+    fn from(err: orangutan_refresh_token::Error) -> Self {
+        match err {
+            orangutan_refresh_token::Error::CannotAddFact(_, _)
+            | orangutan_refresh_token::Error::CannotBuildBiscuit(_)
+            | orangutan_refresh_token::Error::CannotAddBlock(_, _)
+            | orangutan_refresh_token::Error::CannotConvertToBase64(_) => {
+                Self::InternalServerError(format!("Token generation error: {err}"))
+            },
+            orangutan_refresh_token::Error::MalformattedDuration(_, _)
+            | orangutan_refresh_token::Error::UnsupportedDuration(_) => {
+                Self::ClientError(format!("Invalid token data: {err}"))
+            },
+        }
     }
 }

@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+
+{% block main %}
+<div class="page-content">
+  <form action="" method="post" class="form">
+    <div class="form-content">
+      <section class="form-field">
+        <label for="ttl">Expires after (<a href="https://en.wikipedia.org/wiki/ISO_8601#Durations">ISO 8601 Duration format</a>): </label>
+        <input type="text" name="ttl" id="ttl" required value="P1W" />
+      </section>
+      <section class="form-field">
+        <label for="name">Name (unique): </label>
+        <input type="text" name="name" id="name" required />
+      </section>
+      <section class="form-field">
+        <label for="profiles">Profiles (comma separated): </label>
+        <input type="text" name="profiles" id="profiles" required value="amis" />
+      </section>
+      <section class="form-field">
+        <label for="url">Landing page: </label>
+        <input type="url" name="url" id="url" required value="{% if base_url %}{{ base_url }}{% else %}https://blog.remibardon.name{% endif %}" />
+      </section>
+    </div>
+    <input type="submit" value="Generate" />
+  </form>
+  {% if link %}
+    <code class="generated-link">{{ link }}</code>
+  {% endif %}
+</div>
+{% endblock main %}
+
+{% block style %}
+{{ super() }}
+
+.form, .page-content {
+  display: grid;
+  gap: 1em;
+}
+
+.form-content {
+  display: grid;
+  gap: 0.5em;
+}
+
+.form-field {
+  display: grid;
+  gap: 0.25em;
+}
+
+.form input[type=submit] {
+  font-size: medium;
+  margin: 0 auto;
+  min-width: 15%;
+  max-width: fit-content;
+}
+
+.generated-link {
+  line-break: anywhere;
+}
+{% endblock style %}

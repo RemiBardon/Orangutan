@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en-US">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{{ page_title }}</title>
+    <style>
+      {% block style %}
+      body {
+        --text-color: #111;
+        --bg-color: #EEE;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        body {
+          --text-color: #EEE;
+          --bg-color: #111;
+        }
+      }
+
+      body {
+        color: var(--text-color);
+        background: var(--bg-color);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+      }
+
+      a {
+        color: var(--text-color);
+      }
+      {% endblock style %}
+    </style>
+  </head>
+  <body>
+    <h1>{{ page_title }}</h1>
+    <main>
+      {% block main %}{% endblock main %}
+    </main>
+  </body>
+</html>

@@ -1,3 +1,8 @@
+#[cfg(feature = "templating")]
+pub mod templating;
+#[cfg(feature = "token-generator")]
+mod website_root;
+
 use biscuit_auth::{
     builder::{Fact, Term},
     Biscuit,
@@ -7,6 +12,8 @@ use rocket::http::{Cookie, CookieJar, SameSite};
 use time::Duration;
 use tracing::error;
 
+#[cfg(feature = "token-generator")]
+pub use self::website_root::WebsiteRoot;
 use crate::{
     config::TOKEN_COOKIE_NAME,
     routes::debug_routes::{ErrorLog, ERRORS},

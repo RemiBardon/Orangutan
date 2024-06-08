@@ -2,13 +2,9 @@ use std::sync::{Arc, RwLock};
 
 use chrono::{DateTime, Utc};
 use lazy_static::lazy_static;
-use rocket::{
-    get,
-    http::{CookieJar, Status},
-    routes, Route,
-};
+use rocket::{get, http::CookieJar, routes, Route};
 
-use crate::request_guards::Token;
+use crate::{request_guards::Token, Error};
 
 lazy_static! {
     /// A list of runtime errors, used to show error logs in an admin page
@@ -23,12 +19,27 @@ lazy_static! {
 }
 
 pub(super) fn routes() -> Vec<Route> {
-    routes![
+    let routes = routes![
         clear_cookies,
         get_user_info,
         errors,
-        access_logs
-    ]
+        access_logs,
+    ];
+    #[cfg(feature = "token-generator")]
+    let routes = vec![routes, routes![
+        token_generator::token_generation_form,
+        token_generator::generate_token,
+    ]]
+    .concat();
+    routes
+}
+
+#[cfg(feature = "templating")]
+pub(super) fn templates() -> Vec<(&'static str, &'static str)> {
+    vec![(
+        "generate-token.html",
+        include_str!("templates/generate-token.html.tera"),
+    )]
 }
 
 #[get("/clear-cookies")]
@@ -61,9 +72,9 @@ pub struct ErrorLog {
 }
 
 #[get("/_errors")]
-fn errors(token: Token) -> Result<String, Status> {
+fn errors(token: Token) -> Result<String, Error> {
     if !token.profiles().contains(&"*".to_owned()) {
-        Err(Status::Unauthorized)?
+        Err(Error::Unauthorized)?
     }
 
     let mut res = String::new();
@@ -88,9 +99,9 @@ pub struct AccessLog {
 }
 
 #[get("/_access-logs")]
-fn access_logs(token: Token) -> Result<String, Status> {
+fn access_logs(token: Token) -> Result<String, Error> {
     if !token.profiles().contains(&"*".to_owned()) {
-        Err(Status::Unauthorized)?
+        Err(Error::Unauthorized)?
     }
 
     let mut res = String::new();
@@ -124,4 +135,83 @@ pub fn log_access(
         user,
         path,
     })
+}
+
+#[cfg(feature = "token-generator")]
+pub mod token_generator {
+    use orangutan_refresh_token::RefreshToken;
+    use rocket::{
+        form::{Form, Strict},
+        get, post,
+        response::content::RawHtml,
+        FromForm, State,
+    };
+
+    use crate::{
+        context,
+        request_guards::Token,
+        util::{templating::render, WebsiteRoot},
+        Error,
+    };
+
+    fn token_generation_form_(
+        tera: &State<tera::Tera>,
+        link: Option<String>,
+        base_url: &str,
+    ) -> Result<RawHtml<String>, Error> {
+        let html = render(
+            tera,
+            "generate-token.html",
+            context! { page_title: "Access token generator", link, base_url },
+        )?;
+
+        Ok(RawHtml(html))
+    }
+
+    #[get("/_generate-token")]
+    pub fn token_generation_form(
+        token: Token,
+        tera: &State<tera::Tera>,
+        website_root: WebsiteRoot,
+    ) -> Result<RawHtml<String>, Error> {
+        if !token.profiles().contains(&"*".to_owned()) {
+            Err(Error::Unauthorized)?
+        }
+
+        token_generation_form_(tera, None, &website_root)
+    }
+
+    #[derive(FromForm)]
+    pub struct GenerateTokenForm {
+        ttl: String,
+        name: String,
+        profiles: String,
+        url: String,
+    }
+
+    #[post("/_generate-token", data = "<form>")]
+    pub fn generate_token(
+        token: Token,
+        tera: &State<tera::Tera>,
+        form: Form<Strict<GenerateTokenForm>>,
+        website_root: WebsiteRoot,
+    ) -> Result<RawHtml<String>, Error> {
+        if !token.profiles().contains(&"*".to_owned()) {
+            Err(Error::Unauthorized)?
+        }
+
+        let mut profiles = vec![form.name.to_owned()];
+        profiles.append(&mut form.profiles.split(",").map(ToOwned::to_owned).collect());
+        if profiles.contains(&"*".to_string()) {
+            Err(Error::ClientError(format!(
+                "Profiles cannot contain '*' (got {profiles:?})."
+            )))?
+        }
+
+        let token = RefreshToken::try_from(form.ttl.to_owned(), profiles.into_iter())?;
+        let token_base64 = token.as_base64()?;
+        let link = format!("{}?refresh_token={token_base64}", form.url);
+
+        token_generation_form_(tera, Some(link), &website_root)
+    }
 }

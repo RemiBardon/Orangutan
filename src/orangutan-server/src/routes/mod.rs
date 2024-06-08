@@ -19,3 +19,12 @@ pub(super) fn routes() -> Vec<Route> {
     ]
     .concat()
 }
+
+#[cfg(feature = "templating")]
+pub(super) fn templates() -> Vec<(&'static str, &'static str)> {
+    vec![
+        vec![("base.html", include_str!("templates/base.html.tera"))],
+        debug_routes::templates(),
+    ]
+    .concat()
+}
