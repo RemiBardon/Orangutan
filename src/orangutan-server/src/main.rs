@@ -29,14 +29,13 @@ fn rocket() -> _ {
         .mount("/", routes::routes())
         .register("/", catchers![unauthorized, not_found])
         .manage(ObjectReader::new())
-        .attach(AdHoc::on_liftoff("Tracing subsciber", |_| {
-            Box::pin(async move {
-                let subscriber = FmtSubscriber::builder()
-                    .with_env_filter(EnvFilter::from_default_env())
-                    .finish();
-                tracing::subscriber::set_global_default(subscriber)
-                    .expect("Failed to set tracing subscriber.");
-            })
+        .attach(AdHoc::on_ignite("Tracing subsciber", |rocket| async move {
+            let subscriber = FmtSubscriber::builder()
+                .with_env_filter(EnvFilter::from_default_env())
+                .finish();
+            tracing::subscriber::set_global_default(subscriber)
+                .expect("Failed to set tracing subscriber.");
+            rocket
         }))
         .attach(AdHoc::on_liftoff("Website generation", |rocket| {
             Box::pin(async move {
