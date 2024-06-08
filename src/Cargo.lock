@@ -1009,7 +1009,7 @@ dependencies = [
 
 [[package]]
 name = "orangutan-refresh-token"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "biscuit-auth",
  "iso8601-duration",
