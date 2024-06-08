@@ -2,7 +2,7 @@ extern crate biscuit_auth as biscuit;
 
 use std::{env, process};
 
-use orangutan_refresh_token::RefreshToken;
+use orangutan_refresh_token::{Error, RefreshToken};
 use tracing::error;
 
 fn main() {
@@ -12,7 +12,7 @@ fn main() {
     }
 }
 
-fn main_() -> Result<(), String> {
+fn main_() -> Result<(), Error> {
     // Parse arguments
     let duration = env::args()
         .skip(1)

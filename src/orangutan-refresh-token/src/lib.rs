@@ -3,6 +3,7 @@ extern crate biscuit_auth as biscuit;
 use std::{process, time::SystemTime};
 
 use biscuit::{
+    builder::{BlockBuilder, Fact},
     macros::{block, fact},
     Biscuit,
 };
@@ -31,7 +32,7 @@ impl RefreshToken {
     pub fn new(
         duration: std::time::Duration,
         profiles: impl Iterator<Item = String>,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, Error> {
         let mut builder = Biscuit::builder();
 
         // Add profiles to Biscuit
@@ -39,13 +40,13 @@ impl RefreshToken {
             let fact = fact!("profile({profile});");
             builder
                 .add_fact(fact.to_owned())
-                .map_err(|e| format!("Could not add fact '{fact:?}' to Biscuit: {e}"))?;
+                .map_err(|e| Error::CannotAddFact(fact, e))?;
         }
 
         // Create first Biscuit block
         let mut biscuit = builder
             .build(&ROOT_KEY)
-            .map_err(|e| format!("Error building Biscuit: {e}"))?;
+            .map_err(Error::CannotBuildBiscuit)?;
 
         // Add expiry block to Biscuit
         let expiry_block = block!(
@@ -54,7 +55,7 @@ impl RefreshToken {
         );
         biscuit = biscuit
             .append(expiry_block.to_owned())
-            .map_err(|e| format!("Could not add block '{expiry_block}' to Biscuit: {e}"))?;
+            .map_err(|e| Error::CannotAddBlock(expiry_block, e))?;
 
         Ok(Self(biscuit))
     }
@@ -63,23 +64,22 @@ impl RefreshToken {
     pub fn try_from(
         duration: String,
         profiles: impl Iterator<Item = String>,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, Error> {
         let duration = IsoDuration::parse(&duration)
-            .map_err(|e| format!("Duration malformatted ({e:?}). Check ISO 8601."))?
+            .map_err(|e| Error::MalformattedDuration(duration.clone(), e))?
             .to_std()
-            .ok_or(
-                "Cannot convert `iso8601_duration::Duration` to `std::time::Duration`.".to_string(),
-            )?;
+            .ok_or(Error::UnsupportedDuration(duration.clone()))?;
         Self::new(duration, profiles)
     }
 
-    pub fn as_base64(&self) -> Result<String, String> {
+    pub fn as_base64(&self) -> Result<String, Error> {
         // Encode Biscuit to Base64
         let biscuit_base64 = self
             .0
             .to_base64()
+            // Remove Base64 padding (for easier URL query parameter parsing)
             .map(|b| remove_padding(&b).to_owned())
-            .map_err(|e| format!("Error converting Biscuit to Base64: {e}"))?;
+            .map_err(Error::CannotConvertToBase64)?;
 
         Ok(biscuit_base64)
     }
@@ -94,4 +94,21 @@ fn remove_padding<'a>(base64_string: &'a str) -> &'a str {
     }
     // If no '=' character is found, return the original string
     base64_string
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("Could not add fact '{0:?}' to Biscuit: {1}")]
+    CannotAddFact(Fact, biscuit::error::Token),
+    #[error("Error building Biscuit: {0}")]
+    CannotBuildBiscuit(biscuit::error::Token),
+    #[error("Could not add block '{0}' to Biscuit: {1}")]
+    CannotAddBlock(BlockBuilder, biscuit::error::Token),
+    #[error("Could convert Biscuit to Base64: {0}")]
+    CannotConvertToBase64(biscuit::error::Token),
+    #[error("Duration '{0}' malformatted ({1:?}). Check ISO 8601.")]
+    MalformattedDuration(String, iso8601_duration::ParseDurationError),
+    // FIXME: Support `year` and `month` durations
+    #[error("Could not convert `iso8601_duration::Duration` to `std::time::Duration`. '{0}' contains `year` or `month`, which isn't supported by `{}`.", stringify!(iso8601_duration::duration::Duration::to_std))]
+    UnsupportedDuration(String),
 }
