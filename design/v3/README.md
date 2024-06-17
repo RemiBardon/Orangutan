@@ -5,6 +5,8 @@
 - Migration to [JWT]s
   - Usage of [IANA-registered JWT claims]
   - JWTs are encrypted (to avoid data leaks)
+  - Automatically migrate [Orangutan v2](../v2/README.md) Biscuits to JWTs when received
+    - Feature disabled by default (to reduce the number of dependencies), which can be enabled using a [feature flag](https://doc.rust-lang.org/cargo/reference/features.html)
 - Tokens don't contain profiles anymore, they are now exclusively used to identify users
   - Profiles are defined in the static site repository, as Orangutan still doesn't have a database
     - See [Orangutan data file format](#orangutan-data-file-format)
