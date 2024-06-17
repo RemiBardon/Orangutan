@@ -18,9 +18,10 @@ Design decisions are detailed in [`design/README.md`](./design/README.md).
 ## Main features ✨
 
 - **Private pages** with predefined access
-- **No account creation**
+- **No account creation** and **no database**
 - **Efficient lazy website generation** so each profile sees a dedicated version of the website
-- **CLI tool** to generate refresh tokens
+- CLI tool and admin page to **generate access tokens**
+- Ephemeral **access and error logs** for easier debugging (admin-only)
 
 ## Why this name? 🤨
 
