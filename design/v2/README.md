@@ -15,6 +15,13 @@ Those requiring at least one profile are considered "private".
 
 TODO
 
+- Each user has a Biscuit token listing their profiles.
+- Profiles are the only concept known by Orangutan, meaning users usually have one profile which is unique (their identity) and `0..*` profiles which are shared profiles (groups).
+- Orangutan has no database.
+- When applicable, refresh tokens are merged into an existing token to extend permissions (i.e. add profiles).
+- Always-running server which subsribes to content changes.
+- Lazily generated websites, with minimal number of copies.
+
 ## Processes
 
 TODO
