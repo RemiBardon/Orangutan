@@ -357,6 +357,12 @@ pub fn create_tmp_dir() -> Result<(), Error> {
 pub fn trash_outdated_websites() -> Result<State, Error> {
     trace!("Trashing outdated websites…");
 
+    // Empty the trash (it's at least `HEAD~2` so we can safely delete it)
+    // NOTE: This whould not be necessary since the directory should be deleted
+    //   but there might be edge cases where it's still there and the next
+    //   `fs::rename` will fail if it's the case.
+    fs::remove_dir_all(TRASH_DIR.as_path())?;
+
     // Remove outdated websites
     fs::rename(DEST_DIR.as_path(), TRASH_DIR.as_path())?;
 
