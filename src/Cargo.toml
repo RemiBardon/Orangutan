@@ -10,7 +10,7 @@ resolver = "2"
 
 [workspace.dependencies]
 base64 = "0.22"
-biscuit-auth = "4"
+biscuit-auth = "5"
 chrono = "0.4"
 iso8601-duration = "0.2"
 lazy_static = "1"
