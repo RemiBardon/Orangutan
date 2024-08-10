@@ -24,7 +24,10 @@
     <input type="submit" value="Generate" />
   </form>
   {% if link %}
+  <div class="generated-link-container">
     <code class="generated-link">{{ link }}</code>
+    <button onclick="navigator.clipboard.writeText('{{ link }}')">Copy</button>
+  </div>
   {% endif %}
 </div>
 {% endblock main %}
@@ -47,7 +50,8 @@
   gap: 0.25em;
 }
 
-.form input[type=submit] {
+.form input[type=submit],
+button {
   font-size: medium;
   margin: 0 auto;
   min-width: 15%;
@@ -57,5 +61,10 @@
 .generated-link {
   line-break: anywhere;
   -webkit-touch-callout: none;
+}
+
+.generated-link-container {
+  display: grid;
+  gap: 0.5em;
 }
 {% endblock style %}
