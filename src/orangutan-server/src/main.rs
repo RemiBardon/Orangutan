@@ -119,6 +119,8 @@ enum Error {
     UpdateContentError(#[from] update_content_routes::Error),
     #[error("Unauthorized")]
     Unauthorized,
+    #[error("Forbidden")]
+    Forbidden,
     #[cfg(feature = "templating")]
     #[error("Templating error: {0}")]
     TemplatingError(#[from] templating::Error),

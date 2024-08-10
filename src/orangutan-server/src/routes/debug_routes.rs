@@ -4,6 +4,7 @@ use chrono::{DateTime, Utc};
 use lazy_static::lazy_static;
 use rocket::{get, http::CookieJar, routes, Route};
 
+use super::auth_routes::REVOKED_TOKENS;
 use crate::{request_guards::Token, Error};
 
 lazy_static! {
@@ -24,6 +25,7 @@ pub(super) fn routes() -> Vec<Route> {
         get_user_info,
         errors,
         access_logs,
+        revoked_tokens,
     ];
     #[cfg(feature = "token-generator")]
     let routes = vec![routes, routes![
@@ -135,6 +137,21 @@ pub fn log_access(
         user,
         path,
     })
+}
+
+#[get("/_revoked-tokens")]
+fn revoked_tokens(token: Token) -> Result<String, Error> {
+    if !token.profiles().contains(&"*".to_owned()) {
+        Err(Error::Forbidden)?
+    }
+
+    let mut res = String::new();
+    for token in REVOKED_TOKENS.read().unwrap().iter() {
+        res.push_str(std::str::from_utf8(token).unwrap_or("<cannot parse>"));
+        res.push('\n');
+    }
+
+    Ok(res)
 }
 
 #[cfg(feature = "token-generator")]
