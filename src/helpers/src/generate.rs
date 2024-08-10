@@ -12,7 +12,7 @@ use std::{
 };
 
 use lazy_static::lazy_static;
-use tracing::{debug, info, trace};
+use tracing::{debug, error, info, trace};
 
 use crate::{config::*, copy_directory, website_id::*};
 
@@ -141,7 +141,7 @@ fn _update_submodules() -> Result<(), Error> {
     }
 }
 
-fn read_file_to_set_(file: File) -> io::Result<HashSet<Vec<u8>>> {
+fn read_file_lines_as_hex_(file: File) -> io::Result<HashSet<Vec<u8>>> {
     let reader = BufReader::new(file);
 
     let mut set = HashSet::new();
@@ -149,7 +149,10 @@ fn read_file_to_set_(file: File) -> io::Result<HashSet<Vec<u8>>> {
     for line in reader.lines() {
         let line = line?;
         if !line.is_empty() {
-            set.insert(line.into_bytes());
+            set.insert(hex::decode(&line).unwrap_or_else(|err| {
+                error!("Could not parse `{line}` as hexadecimal: {err}");
+                line.into_bytes()
+            }));
         }
     }
 
@@ -166,7 +169,7 @@ pub fn read_revoked_tokens() -> Result<HashSet<Vec<u8>>, Error> {
         );
         return Ok(HashSet::new());
     };
-    let revoked_tokens = read_file_to_set_(revoked_tokens_file)?;
+    let revoked_tokens = read_file_lines_as_hex_(revoked_tokens_file)?;
     info!("Found {} revoked token(s).", revoked_tokens.len());
     Ok(revoked_tokens)
 }

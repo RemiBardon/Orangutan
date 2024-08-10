@@ -1,6 +1,6 @@
 [package]
 name = "orangutan-server"
-version = "0.4.12"
+version = "0.4.13"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -9,6 +9,7 @@ edition = "2021"
 base64 = { workspace = true }
 biscuit-auth = { workspace = true }
 chrono = { workspace = true }
+hex = { workspace = true }
 lazy_static = { workspace = true }
 orangutan-helpers = { path = "../helpers" }
 orangutan-refresh-token = { path = "../orangutan-refresh-token" }

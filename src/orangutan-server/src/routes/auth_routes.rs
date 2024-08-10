@@ -50,7 +50,16 @@ fn handle_refresh_token(
     };
 
     // NOTE: This is just a hotfix. I had to quickly revoke a token. I'll improve this one day.
-    trace!("Checking if refresh token is revoked");
+    trace!("Checking if refresh token is revoked…");
+    trace!(
+        "Revocation identifiers: {}",
+        refresh_biscuit
+            .revocation_identifiers()
+            .into_iter()
+            .map(hex::encode)
+            .collect::<Vec<_>>()
+            .join(", "),
+    );
     let revoked_id = refresh_biscuit
         .revocation_identifiers()
         .into_iter()

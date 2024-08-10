@@ -1110,6 +1110,7 @@ name = "orangutan-helpers"
 version = "0.1.1"
 dependencies = [
  "biscuit-auth",
+ "hex",
  "lazy_static",
  "rocket",
  "serde_json",
@@ -1145,11 +1146,12 @@ dependencies = [
 
 [[package]]
 name = "orangutan-server"
-version = "0.4.12"
+version = "0.4.13"
 dependencies = [
  "base64 0.22.1",
  "biscuit-auth",
  "chrono",
+ "hex",
  "lazy_static",
  "orangutan-helpers",
  "orangutan-refresh-token",
