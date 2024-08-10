@@ -56,5 +56,6 @@
 
 .generated-link {
   line-break: anywhere;
+  -webkit-touch-callout: none;
 }
 {% endblock style %}
