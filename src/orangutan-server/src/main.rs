@@ -35,7 +35,7 @@ use crate::{
 fn rocket() -> _ {
     let rocket = rocket::build()
         .mount("/", routes::routes())
-        .register("/", catchers![unauthorized, not_found])
+        .register("/", catchers![unauthorized, forbidden, not_found])
         .manage(ObjectReader::new())
         .attach(AdHoc::on_ignite("Tracing subsciber", |rocket| async move {
             let subscriber = FmtSubscriber::builder()
@@ -84,6 +84,11 @@ fn liftoff() -> Result<(), Error> {
 #[catch(401)]
 async fn unauthorized() -> Result<NamedFile, &'static str> {
     not_found().await
+}
+
+#[catch(403)]
+async fn forbidden() -> &'static str {
+    "403 Forbidden. Token revoked."
 }
 
 /// TODO: Re-enable Basic authentication
