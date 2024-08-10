@@ -12,6 +12,7 @@ use tracing::{debug, trace};
 use crate::{
     config::*,
     error,
+    request_guards::Token,
     util::{add_cookie, add_padding},
 };
 
@@ -24,6 +25,7 @@ fn handle_refresh_token(
     origin: &Origin,
     cookies: &CookieJar<'_>,
     refresh_token: &str,
+    token: Option<Token>,
 ) -> Result<Redirect, Status> {
     // URL-decode the string.
     let mut refresh_token: String = urlencoding::decode(refresh_token).unwrap().to_string();
@@ -54,6 +56,37 @@ fn handle_refresh_token(
         return Err(Status::Unauthorized);
     }
 
+    fn redirect_to_same_page_without_query_param(origin: &Origin) -> Result<Redirect, Status> {
+        let query_segs: Vec<String> = origin
+            .query()
+            .unwrap()
+            .raw_segments()
+            .filter(|s| !s.starts_with(format!("{REFRESH_TOKEN_QUERY_PARAM_NAME}=").as_str()))
+            .map(ToString::to_string)
+            .collect();
+        match Origin::parse_owned(format!("{}?{}", origin.path(), query_segs.join("&"))) {
+            Ok(redirect_to) => {
+                debug!("Redirecting to <{redirect_to}> from <{origin}>…");
+                Ok(Redirect::found(redirect_to.path().to_string()))
+            },
+            Err(err) => {
+                error(format!("{err}"));
+                Err(Status::InternalServerError)
+            },
+        }
+    }
+
+    if let Some(token) = token {
+        if token.profiles().contains(&"*".to_owned()) {
+            // NOTE: If a super admin generates an access link and accidentally opens it,
+            //   they loose their super admin profile. Then we must regenerate a super admin
+            //   access link and send it to the super admin's device, which increases the potential
+            //   for such a sensitive link to be intercepted. As a safety measure, we don't do anything
+            //   if a super admin uses a refresh token link.
+            return redirect_to_same_page_without_query_param(origin);
+        }
+    }
+
     trace!("Baking new biscuit from refresh token");
     let block_0 = refresh_biscuit.print_block_source(0).unwrap();
     let mut builder = Biscuit::builder();
@@ -71,23 +104,7 @@ fn handle_refresh_token(
     add_cookie(&new_biscuit, cookies);
 
     // Redirect to the same page without the refresh token query param
-    let query_segs: Vec<String> = origin
-        .query()
-        .unwrap()
-        .raw_segments()
-        .filter(|s| !s.starts_with(format!("{REFRESH_TOKEN_QUERY_PARAM_NAME}=").as_str()))
-        .map(ToString::to_string)
-        .collect();
-    match Origin::parse_owned(format!("{}?{}", origin.path(), query_segs.join("&"))) {
-        Ok(redirect_to) => {
-            debug!("Redirecting to <{redirect_to}> from <{origin}>…");
-            Ok(Redirect::found(redirect_to.path().to_string()))
-        },
-        Err(err) => {
-            error(format!("{err}"));
-            Err(Status::InternalServerError)
-        },
-    }
+    redirect_to_same_page_without_query_param(origin)
 }
 
 #[cfg(test)]
