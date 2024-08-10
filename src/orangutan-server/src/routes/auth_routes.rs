@@ -20,12 +20,13 @@ pub(super) fn routes() -> Vec<Route> {
     routes![handle_refresh_token]
 }
 
-#[get("/<_..>?<refresh_token>")]
+#[get("/<_..>?<refresh_token>&<force>")]
 fn handle_refresh_token(
     origin: &Origin,
     cookies: &CookieJar<'_>,
     refresh_token: &str,
     token: Option<Token>,
+    force: Option<bool>,
 ) -> Result<Redirect, Status> {
     // URL-decode the string.
     let mut refresh_token: String = urlencoding::decode(refresh_token).unwrap().to_string();
@@ -77,7 +78,7 @@ fn handle_refresh_token(
     }
 
     if let Some(token) = token {
-        if token.profiles().contains(&"*".to_owned()) {
+        if token.profiles().contains(&"*".to_owned()) && !force.unwrap_or(false) {
             // NOTE: If a super admin generates an access link and accidentally opens it,
             //   they loose their super admin profile. Then we must regenerate a super admin
             //   access link and send it to the super admin's device, which increases the potential
