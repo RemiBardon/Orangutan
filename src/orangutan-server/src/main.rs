@@ -17,6 +17,7 @@ use rocket::{
     response::{self, Responder},
     Request,
 };
+use routes::auth_routes::REVOKED_TOKENS;
 #[cfg(feature = "templating")]
 use tracing::debug;
 use tracing::warn;
@@ -74,6 +75,8 @@ fn rocket() -> _ {
 fn liftoff() -> Result<(), Error> {
     create_tmp_dir()?;
     clone_repository()?;
+    // NOTE: This is just a hotfix. I had to quickly revoke a token. I'll improve this one day.
+    *REVOKED_TOKENS.write().unwrap() = read_revoked_tokens()?;
     generate_default_website()?;
     Ok(())
 }

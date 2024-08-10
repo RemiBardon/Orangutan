@@ -18,7 +18,7 @@ use crate::{
 };
 
 lazy_static! {
-    pub(super) static ref REVOKED_TOKENS: RwLock<HashSet<Vec<u8>>> = RwLock::default();
+    pub static ref REVOKED_TOKENS: RwLock<HashSet<Vec<u8>>> = RwLock::default();
 }
 
 pub(super) fn routes() -> Vec<Route> {
