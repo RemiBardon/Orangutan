@@ -1,6 +1,7 @@
 use orangutan_helpers::generate::{self, *};
 use rocket::{post, response::status::BadRequest, routes, Route};
 
+use super::auth_routes::REVOKED_TOKENS;
 use crate::error;
 
 pub(super) fn routes() -> Vec<Route> {
@@ -12,6 +13,11 @@ pub(super) fn routes() -> Vec<Route> {
 fn update_content_github() -> Result<(), crate::Error> {
     // Update repository
     pull_repository().map_err(Error::CannotPullOutdatedRepository)?;
+
+    // Read revoked tokens list
+    // FIXME: This cannot be reverted
+    *REVOKED_TOKENS.write().unwrap() =
+        read_revoked_tokens().map_err(Error::CannotReadRevokedTokens)?;
 
     // Remove outdated websites
     let state = trash_outdated_websites().map_err(Error::CannotTrashOutdatedWebsites)?;
@@ -39,6 +45,8 @@ pub enum Error {
     WebsiteGenerationError(generate::Error),
     #[error("Cannot pull outdated repository: {0}")]
     CannotPullOutdatedRepository(generate::Error),
+    #[error("Cannot read revoked tokens: {0}")]
+    CannotReadRevokedTokens(generate::Error),
     #[error("Cannot trash outdated websites: {0}")]
     CannotTrashOutdatedWebsites(generate::Error),
     #[error("Cannot recover trash: {0}")]

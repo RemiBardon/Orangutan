@@ -2,7 +2,7 @@ use std::{
     collections::HashSet,
     env,
     fs::{self, File},
-    io::{self, Write},
+    io::{self, BufRead as _, BufReader, Write},
     path::PathBuf,
     process::{Command, Output, Stdio},
     sync::{
@@ -139,6 +139,36 @@ fn _update_submodules() -> Result<(), Error> {
             code: status.code(),
         })
     }
+}
+
+fn read_file_to_set_(file: File) -> io::Result<HashSet<Vec<u8>>> {
+    let reader = BufReader::new(file);
+
+    let mut set = HashSet::new();
+
+    for line in reader.lines() {
+        let line = line?;
+        if !line.is_empty() {
+            set.insert(line.into_bytes());
+        }
+    }
+
+    Ok(set)
+}
+
+// NOTE: This is just a hotfix. I had to quickly revoke a token. I'll improve this one day.
+pub fn read_revoked_tokens() -> Result<HashSet<Vec<u8>>, Error> {
+    let revoked_tokens_file_path = WEBSITE_ROOT.join("revoked_tokens.txt");
+    let Ok(revoked_tokens_file) = File::open(&revoked_tokens_file_path) else {
+        info!(
+            "Revoked tokens file not found at <{}>. Considering no revoked token.",
+            revoked_tokens_file_path.display(),
+        );
+        return Ok(HashSet::new());
+    };
+    let revoked_tokens = read_file_to_set_(revoked_tokens_file)?;
+    info!("Found {} revoked token(s).", revoked_tokens.len());
+    Ok(revoked_tokens)
 }
 
 fn _copy_hugo_config() -> Result<(), Error> {

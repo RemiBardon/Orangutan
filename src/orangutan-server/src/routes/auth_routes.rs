@@ -1,6 +1,7 @@
-use std::time::SystemTime;
+use std::{collections::HashSet, sync::RwLock, time::SystemTime};
 
 use biscuit_auth::{macros::authorizer, Biscuit};
+use lazy_static::lazy_static;
 use rocket::{
     get,
     http::{uri::Origin, CookieJar, Status},
@@ -15,6 +16,10 @@ use crate::{
     request_guards::Token,
     util::{add_cookie, add_padding},
 };
+
+lazy_static! {
+    pub(super) static ref REVOKED_TOKENS: RwLock<HashSet<Vec<u8>>> = RwLock::default();
+}
 
 pub(super) fn routes() -> Vec<Route> {
     routes![handle_refresh_token]
@@ -43,6 +48,23 @@ fn handle_refresh_token(
             return Err(Status::Unauthorized);
         },
     };
+
+    // NOTE: This is just a hotfix. I had to quickly revoke a token. I'll improve this one day.
+    trace!("Checking if refresh token is revoked");
+    let revoked_id = refresh_biscuit
+        .revocation_identifiers()
+        .into_iter()
+        .collect::<HashSet<Vec<u8>>>()
+        .intersection(&REVOKED_TOKENS.read().unwrap())
+        .next()
+        .cloned();
+    if let Some(revoked_id) = revoked_id {
+        debug!(
+            "Refresh token has been revoked ({})",
+            String::from_utf8(revoked_id).unwrap_or("<could not format>".to_string()),
+        );
+        return Err(Status::Forbidden);
+    }
 
     trace!("Checking if refresh token is valid or not");
     let authorizer = authorizer!(
