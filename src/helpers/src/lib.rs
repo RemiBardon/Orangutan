@@ -13,7 +13,7 @@ use std::{
 
 use lazy_static::lazy_static;
 use serde_json::Value;
-use tracing::{debug, error, trace};
+use tracing::trace;
 
 use crate::config::*;
 
@@ -89,19 +89,19 @@ fn _html_file(data_file: &PathBuf) -> Option<Option<PathBuf>> {
     Some(serde_json::from_value(path.to_owned()).ok())
 }
 
-fn html_file(data_file: &PathBuf) -> Result<PathBuf, ()> {
-    match _html_file(data_file) {
-        Some(Some(path)) => Ok(path),
-        Some(None) => {
-            error!("Path not defined");
-            Err(())
-        },
-        None => {
-            error!("File not found");
-            Err(())
-        },
-    }
-}
+// fn html_file(data_file: &PathBuf) -> Result<PathBuf, ()> {
+//     match _html_file(data_file) {
+//         Some(Some(path)) => Ok(path),
+//         Some(None) => {
+//             error!("Path not defined");
+//             Err(())
+//         },
+//         None => {
+//             error!("File not found");
+//             Err(())
+//         },
+//     }
+// }
 
 pub fn data_file(html_file: &PathBuf) -> PathBuf {
     let mut data_file_rel = html_file
