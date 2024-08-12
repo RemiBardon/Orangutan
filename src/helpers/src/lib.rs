@@ -29,18 +29,18 @@ pub fn used_profiles<'a>() -> &'a HashSet<String> {
         return profiles;
     }
 
-    debug!("Reading used profiles…");
+    trace!("Reading used profiles…");
     let acc: &'static mut HashSet<String> = Box::leak(Box::new(HashSet::new()));
 
     for data_file in find_data_files() {
-        trace!("Reading <{}>…", data_file.display());
+        // trace!("Reading <{}>…", data_file.display());
 
         // Make sure this generator isn't broken (could be replaced by unit tests)
-        let html_file = html_file(&data_file).unwrap();
-        debug!("{}", html_file.display());
+        // let html_file = html_file(&data_file).unwrap();
+        // trace!("{}", html_file.display());
 
         let read_allowed = read_allowed(&data_file).unwrap();
-        debug!("  read_allowed: {:?}", read_allowed);
+        // trace!("  read_allowed: {:?}", read_allowed);
 
         // Store new profiles
         read_allowed.iter().for_each(|p| {

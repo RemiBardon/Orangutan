@@ -101,11 +101,11 @@ async fn handle_request(
                 p = allowed_profile.clone(),
                 now = SystemTime::now()
             );
-            trace!(
-                "Running authorizer '{}' on '{}'…",
-                authorizer.dump_code(),
-                biscuit.authorizer().unwrap().dump_code()
-            );
+            // trace!(
+            //     "Running authorizer '{}' on '{}'…",
+            //     authorizer.dump_code(),
+            //     biscuit.authorizer().unwrap().dump_code()
+            // );
             if biscuit.authorize(&authorizer).is_ok() {
                 profile = Some(allowed_profile);
             }
