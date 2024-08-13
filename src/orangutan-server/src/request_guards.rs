@@ -1,12 +1,18 @@
 use std::ops::Deref;
 
 use biscuit_auth::Biscuit;
-use rocket::{http::Status, outcome::Outcome, request, request::FromRequest, Request};
+use rocket::{
+    http::Status,
+    outcome::{try_outcome, Outcome},
+    request::{self, FromRequest},
+    Request,
+};
 use tracing::{debug, trace};
 
 use crate::{
     config::*,
     util::{add_cookie, add_padding, profiles},
+    TracingSpan,
 };
 
 pub struct Token {
@@ -31,6 +37,7 @@ impl Deref for Token {
 pub enum TokenError {
     // TODO: Re-enable Basic authentication
     // Invalid,
+    InternalServerError,
 }
 
 #[rocket::async_trait]
@@ -38,6 +45,12 @@ impl<'r> FromRequest<'r> for Token {
     type Error = TokenError;
 
     async fn from_request(req: &'r Request<'_>) -> request::Outcome<Self, Self::Error> {
+        let span = try_outcome!(TracingSpan::from_request(req)
+            .await
+            .map_error(|(s, ())| (s, TokenError::InternalServerError)));
+        let _span = span.get();
+        let _span = _span.enter();
+
         let mut biscuit: Option<Biscuit> = None;
         let mut should_save: bool = false;
 

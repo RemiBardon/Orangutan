@@ -15,6 +15,7 @@ use crate::{
     error,
     request_guards::Token,
     util::{add_cookie, add_padding},
+    TracingSpan,
 };
 
 lazy_static! {
@@ -27,12 +28,16 @@ pub(super) fn routes() -> Vec<Route> {
 
 #[get("/<_..>?<refresh_token>&<force>")]
 fn handle_refresh_token(
+    span: TracingSpan,
     origin: &Origin,
     cookies: &CookieJar<'_>,
     refresh_token: &str,
     token: Option<Token>,
     force: Option<bool>,
 ) -> Result<Redirect, Status> {
+    let _span = span.get();
+    let _span = _span.enter();
+
     // URL-decode the string.
     let mut refresh_token: String = urlencoding::decode(refresh_token).unwrap().to_string();
 

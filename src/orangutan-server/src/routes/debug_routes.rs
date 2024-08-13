@@ -5,7 +5,7 @@ use lazy_static::lazy_static;
 use rocket::{get, http::CookieJar, routes, Route};
 
 use super::auth_routes::REVOKED_TOKENS;
-use crate::{request_guards::Token, Error};
+use crate::{request_guards::Token, Error, TracingSpan};
 
 lazy_static! {
     /// A list of runtime errors, used to show error logs in an admin page
@@ -45,7 +45,13 @@ pub(super) fn templates() -> Vec<(&'static str, &'static str)> {
 }
 
 #[get("/clear-cookies")]
-fn clear_cookies(cookies: &CookieJar<'_>) -> &'static str {
+fn clear_cookies(
+    span: TracingSpan,
+    cookies: &CookieJar<'_>,
+) -> &'static str {
+    let _span = span.get();
+    let _span = _span.enter();
+
     for cookie in cookies.iter().map(Clone::clone) {
         cookies.remove(cookie);
     }
@@ -54,7 +60,13 @@ fn clear_cookies(cookies: &CookieJar<'_>) -> &'static str {
 }
 
 #[get("/_info")]
-fn get_user_info(token: Option<Token>) -> String {
+fn get_user_info(
+    span: TracingSpan,
+    token: Option<Token>,
+) -> String {
+    let _span = span.get();
+    let _span = _span.enter();
+
     match token {
         Some(Token { biscuit, .. }) => format!(
             "**Biscuit:**\n\n{}\n\n\
@@ -74,7 +86,13 @@ pub struct ErrorLog {
 }
 
 #[get("/_errors")]
-fn errors(token: Token) -> Result<String, Error> {
+fn errors(
+    span: TracingSpan,
+    token: Token,
+) -> Result<String, Error> {
+    let _span = span.get();
+    let _span = _span.enter();
+
     if !token.profiles().contains(&"*".to_owned()) {
         Err(Error::Unauthorized)?
     }
@@ -101,7 +119,13 @@ pub struct AccessLog {
 }
 
 #[get("/_access-logs")]
-fn access_logs(token: Token) -> Result<String, Error> {
+fn access_logs(
+    span: TracingSpan,
+    token: Token,
+) -> Result<String, Error> {
+    let _span = span.get();
+    let _span = _span.enter();
+
     if !token.profiles().contains(&"*".to_owned()) {
         Err(Error::Unauthorized)?
     }
@@ -140,7 +164,13 @@ pub fn log_access(
 }
 
 #[get("/_revoked-tokens")]
-fn revoked_tokens(token: Token) -> Result<String, Error> {
+fn revoked_tokens(
+    span: TracingSpan,
+    token: Token,
+) -> Result<String, Error> {
+    let _span = span.get();
+    let _span = _span.enter();
+
     if !token.profiles().contains(&"*".to_owned()) {
         Err(Error::Forbidden)?
     }
@@ -168,7 +198,7 @@ pub mod token_generator {
         context,
         request_guards::Token,
         util::{templating::render, WebsiteRoot},
-        Error,
+        Error, TracingSpan,
     };
 
     fn token_generation_form_(
@@ -187,10 +217,14 @@ pub mod token_generator {
 
     #[get("/_generate-token")]
     pub fn token_generation_form(
+        span: TracingSpan,
         token: Token,
         tera: &State<tera::Tera>,
         website_root: WebsiteRoot,
     ) -> Result<RawHtml<String>, Error> {
+        let _span = span.get();
+        let _span = _span.enter();
+
         if !token.profiles().contains(&"*".to_owned()) {
             Err(Error::Unauthorized)?
         }
@@ -208,11 +242,15 @@ pub mod token_generator {
 
     #[post("/_generate-token", data = "<form>")]
     pub fn generate_token(
+        span: TracingSpan,
         token: Token,
         tera: &State<tera::Tera>,
         form: Form<Strict<GenerateTokenForm>>,
         website_root: WebsiteRoot,
     ) -> Result<RawHtml<String>, Error> {
+        let _span = span.get();
+        let _span = _span.enter();
+
         if !token.profiles().contains(&"*".to_owned()) {
             Err(Error::Unauthorized)?
         }

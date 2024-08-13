@@ -2,7 +2,7 @@ use orangutan_helpers::generate::{self, *};
 use rocket::{post, response::status::BadRequest, routes, Route};
 
 use super::auth_routes::REVOKED_TOKENS;
-use crate::error;
+use crate::{error, TracingSpan};
 
 pub(super) fn routes() -> Vec<Route> {
     routes![update_content_github, update_content_other]
@@ -10,7 +10,10 @@ pub(super) fn routes() -> Vec<Route> {
 
 /// TODO: [Validate webhook deliveries](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries#validating-webhook-deliveries)
 #[post("/update-content/github")]
-fn update_content_github() -> Result<(), crate::Error> {
+fn update_content_github(span: TracingSpan) -> Result<(), crate::Error> {
+    let _span = span.get();
+    let _span = _span.enter();
+
     // Update repository
     pull_repository().map_err(Error::CannotPullOutdatedRepository)?;
 
@@ -35,7 +38,13 @@ fn update_content_github() -> Result<(), crate::Error> {
 }
 
 #[post("/update-content/<source>")]
-fn update_content_other(source: &str) -> BadRequest<String> {
+fn update_content_other(
+    span: TracingSpan,
+    source: &str,
+) -> BadRequest<String> {
+    let _span = span.get();
+    let _span = _span.enter();
+
     BadRequest(format!("Source '{source}' is not supported."))
 }
 

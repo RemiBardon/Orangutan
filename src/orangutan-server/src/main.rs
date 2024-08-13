@@ -3,6 +3,16 @@ mod request_guards;
 mod routes;
 mod util;
 
+use std::{
+    convert::Infallible,
+    fmt::Display,
+    ops::Deref,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, RwLock, RwLockReadGuard,
+    },
+};
+
 use object_reader::ObjectReader;
 use orangutan_helpers::{
     generate::{self, *},
@@ -11,9 +21,10 @@ use orangutan_helpers::{
 };
 use rocket::{
     catch, catchers,
-    fairing::AdHoc,
+    fairing::{self, AdHoc, Fairing},
     fs::NamedFile,
     http::Status,
+    request::{self, FromRequest},
     response::{self, Responder},
     Request,
 };
@@ -53,7 +64,9 @@ fn rocket() -> _ {
                     rocket.shutdown().notify();
                 }
             })
-        }));
+        }))
+        .attach(RequestIdFairing)
+        .attach(TracingSpanFairing);
 
     // Add support for templating if needed
     #[cfg(feature = "templating")]
@@ -176,5 +189,139 @@ impl From<orangutan_refresh_token::Error> for Error {
                 Self::ClientError(format!("Invalid token data: {err}"))
             },
         }
+    }
+}
+
+// ===== Request ID =====
+
+#[derive(Debug, Clone)]
+pub struct RequestId(String);
+impl Deref for RequestId {
+    type Target = String;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl Display for RequestId {
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        Display::fmt(self.deref(), f)
+    }
+}
+#[rocket::async_trait]
+impl<'r> FromRequest<'r> for RequestId {
+    type Error = Infallible;
+
+    async fn from_request(req: &'r Request<'_>) -> request::Outcome<Self, Self::Error> {
+        static COUNTER: AtomicUsize = AtomicUsize::new(1);
+        let request_id = RequestId(
+            req.headers()
+                .get_one("X-Request-Id")
+                .map(ToString::to_string)
+                .unwrap_or_else(|| COUNTER.fetch_add(1, Ordering::Relaxed).to_string()),
+        );
+        request::Outcome::Success(request_id)
+    }
+}
+
+#[rocket::async_trait]
+trait RequestIdTrait {
+    async fn id(&self) -> RequestId;
+}
+
+#[rocket::async_trait]
+impl<'r> RequestIdTrait for Request<'r> {
+    async fn id(&self) -> RequestId {
+        self.guard::<RequestId>().await.unwrap().to_owned()
+    }
+}
+
+// ===== Request ID fairing =====
+
+struct RequestIdFairing;
+
+#[rocket::async_trait]
+impl Fairing for RequestIdFairing {
+    fn info(&self) -> fairing::Info {
+        fairing::Info {
+            name: "Add a unique request ID to every request",
+            kind: fairing::Kind::Request,
+        }
+    }
+
+    /// See <https://rocket.rs/guide/v0.5/state/#request-local-state>
+    /// and <https://users.rust-lang.org/t/idiomatic-rust-way-to-generate-unique-id/33805/6>.
+    async fn on_request(
+        &self,
+        req: &mut Request<'_>,
+        _: &mut rocket::Data<'_>,
+    ) {
+        static COUNTER: AtomicUsize = AtomicUsize::new(1);
+        let request_id = RequestId(
+            req.headers()
+                .get_one("X-Request-Id")
+                .map(ToString::to_string)
+                .unwrap_or_else(|| COUNTER.fetch_add(1, Ordering::Relaxed).to_string()),
+        );
+        req.local_cache(|| request_id);
+    }
+}
+
+// ===== Tracing span =====
+
+#[derive(Clone)]
+pub struct TracingSpan(Arc<RwLock<tracing::Span>>);
+
+impl TracingSpan {
+    pub fn get(&self) -> RwLockReadGuard<'_, tracing::Span> {
+        self.0.read().unwrap()
+    }
+}
+
+#[rocket::async_trait]
+impl<'r> FromRequest<'r> for TracingSpan {
+    type Error = ();
+
+    async fn from_request(request: &'r Request<'_>) -> request::Outcome<Self, ()> {
+        let span: &TracingSpan =
+            request.local_cache(|| panic!("Tracing span should be managed by then"));
+        request::Outcome::Success(span.to_owned())
+    }
+}
+
+// ===== Tracing span fairing =====
+
+struct TracingSpanFairing;
+
+#[rocket::async_trait]
+impl Fairing for TracingSpanFairing {
+    fn info(&self) -> fairing::Info {
+        fairing::Info {
+            name: "Add request information to tracing span",
+            kind: fairing::Kind::Request,
+        }
+    }
+
+    async fn on_request(
+        &self,
+        req: &mut Request<'_>,
+        _: &mut rocket::Data<'_>,
+    ) {
+        let user_agent = req.headers().get_one("User-Agent").unwrap_or("none");
+        let request_id = req.id().await;
+
+        let span = tracing::debug_span!(
+            "request",
+            request_id = %request_id,
+            http.method = %req.method(),
+            http.uri = %req.uri().path(),
+            http.user_agent = %user_agent,
+            otel.name=%format!("{} {}", req.method(), req.uri().path()),
+        );
+
+        req.local_cache(|| TracingSpan(Arc::new(RwLock::new(span))));
     }
 }

@@ -10,7 +10,9 @@ use rocket::{
 };
 use tracing::{debug, trace};
 
-use crate::{config::*, request_guards::Token, routes::debug_routes::log_access, util::error};
+use crate::{
+    config::*, request_guards::Token, routes::debug_routes::log_access, util::error, TracingSpan,
+};
 
 pub(super) fn routes() -> Vec<Route> {
     routes![handle_request]
@@ -18,11 +20,15 @@ pub(super) fn routes() -> Vec<Route> {
 
 #[get("/<_..>")]
 async fn handle_request(
+    span: TracingSpan,
     origin: &Origin<'_>,
     token: Option<Token>,
     object_reader: &State<ObjectReader>,
     accept: Option<&Accept>,
 ) -> Result<Option<ReadObjectResponse>, crate::Error> {
+    let span = span.get();
+    let _span = span.enter();
+
     // FIXME: Handle error
     let path = urlencoding::decode(origin.path().as_str())
         .unwrap()
