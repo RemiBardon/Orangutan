@@ -3,12 +3,15 @@ pub mod templating;
 #[cfg(feature = "token-generator")]
 mod website_root;
 
+use axum_extra::extract::{
+    cookie::{Cookie, SameSite},
+    PrivateCookieJar,
+};
 use biscuit_auth::{
     builder::{Fact, Term},
     Biscuit,
 };
 use chrono::Utc;
-use rocket::http::{Cookie, CookieJar, SameSite};
 use time::Duration;
 use tracing::error;
 
@@ -58,7 +61,7 @@ pub fn add_padding(base64_string: &str) -> String {
 
 pub fn add_cookie(
     biscuit: &Biscuit,
-    cookies: &CookieJar<'_>,
+    cookies: PrivateCookieJar,
 ) {
     match biscuit.to_base64() {
         Ok(base64) => {
@@ -75,4 +78,41 @@ pub fn add_cookie(
             error(format!("Error setting token cookie: {err}"));
         },
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::add_padding;
+
+    #[test]
+    fn test_base64_padding() {
+        assert_eq!(add_padding("a"), "a===".to_string());
+        assert_eq!(add_padding("ab"), "ab==".to_string());
+        assert_eq!(add_padding("abc"), "abc=".to_string());
+        assert_eq!(add_padding("abcd"), "abcd".to_string());
+
+        assert_eq!(add_padding("a==="), "a===".to_string());
+        assert_eq!(add_padding("ab=="), "ab==".to_string());
+        assert_eq!(add_padding("abc="), "abc=".to_string());
+        assert_eq!(add_padding("abcd"), "abcd".to_string());
+    }
+
+    // #[test]
+    // fn test_should_force_token_refresh() {
+    //     assert_eq!(should_force_token_refresh(None), false);
+    //     assert_eq!(should_force_token_refresh(Some(Ok(true))), true);
+    //     assert_eq!(should_force_token_refresh(Some(Ok(false))), false);
+    //     assert_eq!(
+    //         should_force_token_refresh(Some(Err(Errors::new().with_name("yes")))),
+    //         true
+    //     );
+    //     assert_eq!(
+    //         should_force_token_refresh(Some(Err(Errors::new().with_name("no")))),
+    //         true
+    //     );
+    //     assert_eq!(
+    //         should_force_token_refresh(Some(Err(Errors::new().with_name("")))),
+    //         true
+    //     );
+    // }
 }

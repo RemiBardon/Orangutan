@@ -1,84 +1,73 @@
-use std::{path::Path, time::SystemTime};
+use std::{path::PathBuf, str::FromStr, time::SystemTime};
 
-use biscuit_auth::macros::authorizer;
-use object_reader::{ObjectReader, ReadObjectResponse};
-use orangutan_helpers::{data_file, read_allowed, readers::object_reader, website_id::WebsiteId};
-use rocket::{
-    get,
-    http::{uri::Origin, Accept},
-    routes, Route, State,
+use axum::{
+    extract::Path,
+    http::{header::ACCEPT, HeaderMap},
+    routing::get,
+    Router,
 };
+use biscuit_auth::macros::authorizer;
+use mime::Mime;
+use orangutan_helpers::{
+    page_metadata,
+    website_id::{website_dir, WebsiteId},
+};
+use tower_http::services::{ServeDir, ServeFile};
 use tracing::{debug, trace};
 
 use crate::{config::*, request_guards::Token, routes::debug_routes::log_access, util::error};
 
-pub(super) fn routes() -> Vec<Route> {
-    routes![handle_request]
+pub(super) fn router() -> Router {
+    Router::new()
+        .route("/", get(handle_request))
+        .route("/*path", get(handle_request))
 }
 
-#[get("/<_..>")]
 async fn handle_request(
-    origin: &Origin<'_>,
+    Path(path): Path<String>,
     token: Option<Token>,
-    object_reader: &State<ObjectReader>,
-    accept: Option<&Accept>,
-) -> Result<Option<ReadObjectResponse>, crate::Error> {
+    headers: HeaderMap<String>,
+) -> Result<Option<()>, crate::Error> {
     // FIXME: Handle error
-    let path = urlencoding::decode(origin.path().as_str())
-        .unwrap()
-        .into_owned();
+    let path = path;
     trace!("GET {}", &path);
 
     let user_profiles: Vec<String> = token.as_ref().map(Token::profiles).unwrap_or_default();
     debug!("User has profiles {user_profiles:?}");
     let website_id = WebsiteId::from(&user_profiles);
+    let website_dir = website_dir(&website_id);
 
     // Log access only if the page is HTML.
     // WARN: This solution is far from perfect as someone requesting a page without setting the `Accept` header
     //   would not be logged even though they'd get the file back.
-    if accept.is_some_and(|a| a.media_types().find(|t| t.is_html()).is_some()) {
+    let accept = headers
+        .get(ACCEPT)
+        .map(|value| value.parse::<Mime>().ok())
+        .flatten();
+    if accept.is_some_and(|m| m.type_() == mime::HTML) {
         log_access(user_profiles.to_owned(), path.to_owned());
     }
 
-    let stored_objects: Vec<String> =
-        object_reader
-            .list_objects(&path, &website_id)
-            .map_err(|err| Error::CannotListObjects {
-                path: path.to_owned(),
-                err,
-            })?;
-    let Some(object_key) = matching_files(&path, &stored_objects)
-        .first()
-        .map(|o| o.to_owned())
-    else {
-        error(format!(
-            "No file matching '{}' found in stored objects",
-            &path
-        ));
-        return Ok(None);
+    let page_relpath = PathBuf::from_str(&path).unwrap();
+    let Some(page_metadata) = page_metadata(&page_relpath)? else {
+        // If metadata can't be found, it means it's a static file
+        trace!("File <{path> did not explicitly allow profiles, serving static file");
+        // TODO: Un-hardcode this value.
+        return ServeDir::new("static")
+            .not_found_service(ServeFile::new(website_dir.join(NOT_FOUND_FILE)));
     };
 
-    let allowed_profiles = allowed_profiles(&object_key);
-    let Some(allowed_profiles) = allowed_profiles else {
-        // If allowed profiles is empty, it means it's a static file
-        trace!(
-            "File <{}> did not explicitly allow profiles, serving static file",
-            &path
-        );
+    let allowed_profiles = page_metadata.read_allowed;
+    // debug!(
+    //     "Page <{}> can be read by {}",
+    //     &path,
+    //     allowed_profiles
+    //         .iter()
+    //         .map(|p| format!("'{}'", p))
+    //         .collect::<Vec<_>>()
+    //         .join(", ")
+    // );
 
-        return Ok(Some(
-            object_reader.read_object(&object_key, &website_id).await,
-        ));
-    };
-    debug!(
-        "Page <{}> can be read by {}",
-        &path,
-        allowed_profiles
-            .iter()
-            .map(|p| format!("'{}'", p))
-            .collect::<Vec<_>>()
-            .join(", ")
-    );
     let mut profile: Option<String> = None;
     let biscuit = token.map(|t| t.biscuit);
     for allowed_profile in allowed_profiles {
@@ -116,119 +105,10 @@ async fn handle_request(
         return Ok(None);
     }
 
-    Ok(Some(
-        object_reader.read_object(object_key, &website_id).await,
-    ))
-}
+    let page_abspath = website_dir.join(page_metadata.path);
 
-fn allowed_profiles<'r>(path: &String) -> Option<Vec<String>> {
-    let path = path.rsplit_once("@").unwrap_or((path, "")).0;
-    let data_file = data_file(&Path::new(path).to_path_buf());
-    read_allowed(&data_file)
-}
+    ServeFile::new(page_abspath);
+    ServeFile::new(website_dir.join(NOT_FOUND_FILE));
 
-fn matching_files<'a>(
-    query: &str,
-    stored_objects: &'a Vec<String>,
-) -> Vec<&'a String> {
-    stored_objects
-        .into_iter()
-        .filter(|p| {
-            let query = query.strip_suffix("index.html").unwrap_or(query);
-            let Some(mut p) = p.strip_prefix(query) else {
-                return false;
-            };
-            p = p.trim_start_matches('/');
-            p = p.strip_prefix("index.html").unwrap_or(p);
-            return p.is_empty() || p.starts_with('@');
-        })
-        .collect()
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error("Error when listing objects matching '{path}': {err}")]
-    CannotListObjects {
-        path: String,
-        err: object_reader::Error,
-    },
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_index_html() {
-        let stored_objects = vec![
-            "/index.html@_default",
-            "/whatever/index.html@friends",
-            "/whatever/index.html@family",
-            "/whatever/p.html@_default",
-            "/whatever/index.htmlindex.html@_default",
-            "/whatever/other-page/index.html@_default",
-            "/whatever/a/b.html@_default",
-        ]
-        .into_iter()
-        .map(|p| p.to_string())
-        .collect::<Vec<String>>();
-
-        assert_eq!(matching_files("", &stored_objects), vec![
-            "/index.html@_default",
-        ]);
-        assert_eq!(matching_files("/", &stored_objects), vec![
-            "/index.html@_default",
-        ]);
-        assert_eq!(matching_files("/index.html", &stored_objects), vec![
-            "/index.html@_default",
-        ]);
-
-        assert_eq!(matching_files("/whatever", &stored_objects), vec![
-            "/whatever/index.html@friends",
-            "/whatever/index.html@family",
-        ]);
-        assert_eq!(matching_files("/whatever/", &stored_objects), vec![
-            "/whatever/index.html@friends",
-            "/whatever/index.html@family",
-        ]);
-        assert_eq!(
-            matching_files("/whatever/index.html", &stored_objects),
-            vec![
-                "/whatever/index.html@friends",
-                "/whatever/index.html@family",
-            ]
-        );
-
-        assert_eq!(
-            matching_files("/whatever/a", &stored_objects),
-            Vec::<&str>::new()
-        );
-        assert_eq!(
-            matching_files("/whatever/a/b", &stored_objects),
-            Vec::<&str>::new()
-        );
-        assert_eq!(matching_files("/whatever/a/b.html", &stored_objects), vec![
-            "/whatever/a/b.html@_default",
-        ]);
-    }
-
-    #[test]
-    fn test_other_extensions() {
-        let stored_objects = vec![
-            "/style.css@_default",
-            "/anything.custom@friends",
-            "/anything.custom@family",
-        ]
-        .into_iter()
-        .map(|p| p.to_string())
-        .collect::<Vec<String>>();
-
-        assert_eq!(matching_files("/style.css", &stored_objects), vec![
-            "/style.css@_default",
-        ]);
-        assert_eq!(matching_files("/anything.custom", &stored_objects), vec![
-            "/anything.custom@friends",
-            "/anything.custom@family",
-        ]);
-    }
+    panic!()
 }

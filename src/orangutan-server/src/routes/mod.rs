@@ -3,21 +3,17 @@
 // Copyright: 2023–2024, Rémi Bardon <remi@remibardon.name>
 // License: Mozilla Public License v2.0 (MPL v2.0)
 
-pub mod auth_routes;
 pub mod debug_routes;
 pub mod main_route;
 pub mod update_content_routes;
 
-use rocket::Route;
+use axum::Router;
 
-pub(super) fn routes() -> Vec<Route> {
-    vec![
-        main_route::routes(),
-        auth_routes::routes(),
-        update_content_routes::routes(),
-        debug_routes::routes(),
-    ]
-    .concat()
+pub(super) fn router() -> Router {
+    Router::new()
+        .merge(main_route::router())
+        .merge(update_content_routes::router())
+        .merge(debug_routes::router())
 }
 
 #[cfg(feature = "templating")]

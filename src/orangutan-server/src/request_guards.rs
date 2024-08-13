@@ -1,13 +1,29 @@
-use std::ops::Deref;
+use std::{
+    collections::{HashMap, HashSet},
+    ops::Deref,
+    sync::RwLock,
+    time::SystemTime,
+};
 
-use biscuit_auth::Biscuit;
-use rocket::{http::Status, outcome::Outcome, request, request::FromRequest, Request};
+use axum::{
+    extract::{rejection::QueryRejection, FromRequestParts, Query, Request},
+    http::{request, HeaderMap, StatusCode, Uri},
+    middleware::Next,
+    response::{IntoResponse, Redirect, Response},
+};
+use axum_extra::extract::PrivateCookieJar;
+use biscuit_auth::{macros::authorizer, Biscuit};
+use lazy_static::lazy_static;
 use tracing::{debug, trace};
 
 use crate::{
     config::*,
-    util::{add_cookie, add_padding, profiles},
+    util::{add_cookie, add_padding, error, profiles},
 };
+
+lazy_static! {
+    pub static ref REVOKED_TOKENS: RwLock<HashSet<Vec<u8>>> = RwLock::default();
+}
 
 pub struct Token {
     pub biscuit: Biscuit,
@@ -27,17 +43,40 @@ impl Deref for Token {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum TokenError {
     // TODO: Re-enable Basic authentication
     // Invalid,
+    #[error("Invalid query: {0}")]
+    InvalidQuery(#[from] QueryRejection),
+    #[error("Unauthorized")]
+    Unauthorized,
+}
+impl IntoResponse for TokenError {
+    fn into_response(self) -> Response {
+        match self {
+            Self::InvalidQuery(err) => err.into_response(),
+            Self::Unauthorized => StatusCode::UNAUTHORIZED.into(),
+        }
+    }
 }
 
-#[rocket::async_trait]
-impl<'r> FromRequest<'r> for Token {
-    type Error = TokenError;
+#[axum::async_trait]
+impl<S> FromRequestParts<S> for Token
+where
+    S: Send + Sync,
+{
+    type Rejection = TokenError;
 
-    async fn from_request(req: &'r Request<'_>) -> request::Outcome<Self, Self::Error> {
+    async fn from_request_parts(
+        parts: &mut request::Parts,
+        state: &S,
+    ) -> Result<Self, Self::Rejection> {
+        // if let Some(user_agent) = parts.headers.get(USER_AGENT) {
+        //     Ok(ExtractUserAgent(user_agent.clone()))
+        // } else {
+        //     Err((StatusCode::BAD_REQUEST, "`User-Agent` header is missing"))
+        // }
         let mut biscuit: Option<Biscuit> = None;
         let mut should_save: bool = false;
 
@@ -74,7 +113,8 @@ impl<'r> FromRequest<'r> for Token {
         }
 
         // Check cookies
-        if let Some(cookie) = req.cookies().get(TOKEN_COOKIE_NAME) {
+        let cookies = PrivateCookieJar::from_request_parts(parts, state).await?;
+        if let Some(cookie) = cookies.get(TOKEN_COOKIE_NAME) {
             debug!("Found token cookie");
             let token: &str = cookie.value();
             // NOTE: We don't want to send a `Set-Cookie` header after finding a token in a cookie,
@@ -87,7 +127,8 @@ impl<'r> FromRequest<'r> for Token {
         }
 
         // Check authorization headers
-        let authorization_headers: Vec<&str> = req.headers().get("Authorization").collect();
+        let headers = HeaderMap::from_request_parts(parts, state).await?;
+        let authorization_headers: Vec<&str> = headers.get("Authorization").collect();
         debug!(
             "{} 'Authorization' headers provided",
             authorization_headers.len()
@@ -103,10 +144,8 @@ impl<'r> FromRequest<'r> for Token {
         }
 
         // Check query params
-        if let Some(token) = req
-            .query_value::<String>(TOKEN_QUERY_PARAM_NAME)
-            .and_then(Result::ok)
-        {
+        let query = Query::<HashMap<String, String>>::from_request_parts(parts, state).await?;
+        if let Some(token) = query.get(TOKEN_QUERY_PARAM_NAME) {
             debug!("Found token query param");
             process_token(&token, "token query param", &mut biscuit, &mut should_save);
         }
@@ -114,13 +153,127 @@ impl<'r> FromRequest<'r> for Token {
         match biscuit {
             Some(biscuit) => {
                 if should_save {
-                    add_cookie(&biscuit, req.cookies());
+                    add_cookie(&biscuit, cookies);
                 }
-                Outcome::Success(Token { biscuit })
+                Ok(Token { biscuit })
             },
-            None => Outcome::Forward(Status::Unauthorized),
+            None => Err(TokenError::Unauthorized),
         }
     }
+}
+
+pub fn handle_refresh_token(
+    uri: Uri,
+    cookies: PrivateCookieJar,
+    Query(refresh_token): Query<&str>,
+    Query(force): Query<Option<bool>>,
+    token: Option<Token>,
+    next: Next,
+) -> Result<Redirect, StatusCode> {
+    // URL-decode the string.
+    let mut refresh_token: String = urlencoding::decode(refresh_token).unwrap().to_string();
+
+    // Because tokens can be passed as URL query params,
+    // they might have the "=" padding characters removed.
+    // We need to add them back.
+    refresh_token = add_padding(&refresh_token);
+
+    let refresh_biscuit: Biscuit = match Biscuit::from_base64(refresh_token, ROOT_KEY.public()) {
+        Ok(biscuit) => biscuit,
+        Err(err) => {
+            debug!("Error decoding biscuit from base64: {}", err);
+            return Err(StatusCode::UNAUTHORIZED);
+        },
+    };
+
+    // NOTE: This is just a hotfix. I had to quickly revoke a token. I'll improve this one day.
+    trace!("Checking if refresh token is revoked…");
+    trace!(
+        "Revocation identifiers: {}",
+        refresh_biscuit
+            .revocation_identifiers()
+            .into_iter()
+            .map(hex::encode)
+            .collect::<Vec<_>>()
+            .join(", "),
+    );
+    let revoked_id = refresh_biscuit
+        .revocation_identifiers()
+        .into_iter()
+        .collect::<HashSet<Vec<u8>>>()
+        .intersection(&REVOKED_TOKENS.read().unwrap())
+        .next()
+        .cloned();
+    if let Some(revoked_id) = revoked_id {
+        debug!(
+            "Refresh token has been revoked ({})",
+            String::from_utf8(revoked_id).unwrap_or("<could not format>".to_string()),
+        );
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    trace!("Checking if refresh token is valid or not");
+    let authorizer = authorizer!(
+        r#"
+        time({now});
+        allow if true;
+        "#,
+        now = SystemTime::now(),
+    );
+    if let Err(err) = refresh_biscuit.authorize(&authorizer) {
+        debug!("Refresh token is invalid: {}", err);
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    fn redirect_to_same_page_without_query_param(uri: &Uri) -> Result<Redirect, StatusCode> {
+        let query_segs: Vec<String> = uri
+            .query()
+            .unwrap_or_default()
+            .raw_segments()
+            .filter(|s| !s.starts_with(format!("{REFRESH_TOKEN_QUERY_PARAM_NAME}=").as_str()))
+            .map(ToString::to_string)
+            .collect();
+        match Uri::parse_owned(format!("{}?{}", uri.path(), query_segs.join("&"))) {
+            Ok(redirect_to) => {
+                debug!("Redirecting to <{redirect_to}> from <{uri}>…");
+                Ok(Redirect::found(redirect_to.path().to_string()))
+            },
+            Err(err) => {
+                error(format!("{err}"));
+                Err(StatusCode::InternalServerError)
+            },
+        }
+    }
+
+    if let Some(token) = token {
+        if token.profiles().contains(&"*".to_owned()) && !force.unwrap_or(false) {
+            // NOTE: If a super admin generates an access link and accidentally opens it,
+            //   they loose their super admin profile. Then we must regenerate a super admin
+            //   access link and send it to the super admin's device, which increases the potential
+            //   for such a sensitive link to be intercepted. As a safety measure, we don't do anything
+            //   if a super admin uses a refresh token link.
+            return redirect_to_same_page_without_query_param(&uri);
+        }
+    }
+
+    trace!("Baking new biscuit from refresh token");
+    let block_0 = refresh_biscuit.print_block_source(0).unwrap();
+    let mut builder = Biscuit::builder();
+    builder.add_code(block_0).unwrap();
+    let new_biscuit = match builder.build(&ROOT_KEY) {
+        Ok(biscuit) => biscuit,
+        Err(err) => {
+            error(format!("Error: Could not append block to biscuit: {err}"));
+            return Err(StatusCode::InternalServerError);
+        },
+    };
+    debug!("Successfully created new biscuit from refresh token");
+
+    // Save token to a HTTP Cookie
+    add_cookie(&new_biscuit, cookies);
+
+    // Redirect to the same page without the refresh token query param
+    redirect_to_same_page_without_query_param(&uri)
 }
 
 fn merge_biscuits(

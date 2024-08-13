@@ -3,24 +3,22 @@ mod request_guards;
 mod routes;
 mod util;
 
-use object_reader::ObjectReader;
+use axum::{
+    http::{Response, StatusCode},
+    response::IntoResponse,
+    routing::get,
+    Router,
+};
 use orangutan_helpers::{
     generate::{self, *},
-    readers::object_reader,
     website_id::WebsiteId,
 };
-use rocket::{
-    catch, catchers,
-    fairing::AdHoc,
-    fs::NamedFile,
-    http::Status,
-    response::{self, Responder},
-    Request,
-};
-use routes::auth_routes::REVOKED_TOKENS;
+use request_guards::{handle_refresh_token, REVOKED_TOKENS};
+use tera::Tera;
+use tower_http::{services::ServeFile, trace::TraceLayer};
 #[cfg(feature = "templating")]
 use tracing::debug;
-use tracing::warn;
+use tracing::{info, warn};
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
 #[cfg(feature = "templating")]
@@ -31,45 +29,50 @@ use crate::{
     util::error,
 };
 
-#[rocket::launch]
-fn rocket() -> _ {
-    let rocket = rocket::build()
-        .mount("/", routes::routes())
-        .register("/", catchers![unauthorized, forbidden, not_found])
-        .manage(ObjectReader::new())
-        .attach(AdHoc::on_ignite("Tracing subsciber", |rocket| async move {
-            let subscriber = FmtSubscriber::builder()
-                .with_env_filter(EnvFilter::from_default_env())
-                .finish();
-            tracing::subscriber::set_global_default(subscriber)
-                .expect("Failed to set tracing subscriber.");
-            rocket
-        }))
-        .attach(AdHoc::on_liftoff("Website generation", |rocket| {
-            Box::pin(async move {
-                if let Err(err) = liftoff() {
-                    // We drop the error to get a Rocket-formatted panic.
-                    drop(err);
-                    rocket.shutdown().notify();
-                }
-            })
-        }));
+#[derive(Clone, Default)]
+struct AppState {
+    #[cfg(feature = "templating")]
+    tera: Tera,
+}
+
+#[tokio::main]
+async fn main() {
+    // build our application with a single route
+    let app = Router::new().nest("/", routes::router()).layer(
+        ServiceBuilder::new()
+            .layer(TraceLayer::new_for_http())
+            .layer(handle_refresh_token),
+    );
+    // .register("/", catchers![unauthorized, forbidden, not_found])
+
+    let mut app_state = AppState::default();
+
+    info!("Setting up tracing…");
+    let subscriber = FmtSubscriber::builder()
+        .with_env_filter(EnvFilter::from_default_env())
+        .finish();
+    tracing::subscriber::set_global_default(subscriber).expect("Failed to set tracing subscriber.");
 
     // Add support for templating if needed
     #[cfg(feature = "templating")]
-    let rocket = rocket.attach(AdHoc::on_ignite(
-        "Initialize templating engine",
-        |rocket| async move {
-            let mut tera = tera::Tera::default();
-            if let Err(err) = tera.add_raw_templates(routes::templates()) {
-                tracing::error!("{err}");
-                std::process::exit(1)
-            }
-            rocket.manage(tera)
-        },
-    ));
+    {
+        info!("Initializing templating engine…");
+        if let Err(err) = app_state.tera.add_raw_templates(routes::templates()) {
+            tracing::error!("{err}");
+            std::process::exit(1)
+        }
+    }
 
-    rocket
+    info!("Generating default website");
+    if let Err(err) = liftoff() {
+        panic!("{err}");
+    }
+
+    let app = app.with_state(app_state);
+
+    // Run our app with hyper, listening globally on port 8080.
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await.unwrap();
+    axum::serve(listener, app).await.unwrap();
 }
 
 fn liftoff() -> Result<(), Error> {
@@ -81,20 +84,20 @@ fn liftoff() -> Result<(), Error> {
     Ok(())
 }
 
-#[catch(401)]
-async fn unauthorized() -> Result<NamedFile, &'static str> {
+// #[catch(401)]
+async fn unauthorized() -> Result<ServeFile, &'static str> {
     not_found().await
 }
 
-#[catch(403)]
+// #[catch(403)]
 async fn forbidden() -> &'static str {
     "403 Forbidden. Token revoked."
 }
 
 /// TODO: Re-enable Basic authentication
 ///   (`.raw_header("WWW-Authenticate", "Basic realm=\"This page is protected. Please log in.\"")`).
-#[catch(404)]
-async fn not_found() -> Result<NamedFile, &'static str> {
+// #[catch(404)]
+async fn not_found() -> Result<ServeFile, &'static str> {
     let website_id = WebsiteId::default();
     let website_dir = match generate_website_if_needed(&website_id) {
         Ok(dir) => dir,
@@ -104,7 +107,7 @@ async fn not_found() -> Result<NamedFile, &'static str> {
         },
     };
     let file_path = website_dir.join(NOT_FOUND_FILE);
-    NamedFile::open(file_path.clone()).await.map_err(|err| {
+    ServeFile::open(file_path.clone()).await.map_err(|err| {
         error(format!(
             "Could not read \"not found\" file at <{}>: {}",
             file_path.display(),
@@ -118,8 +121,6 @@ async fn not_found() -> Result<NamedFile, &'static str> {
 enum Error {
     #[error(transparent)]
     WebsiteGenerationError(#[from] generate::Error),
-    #[error(transparent)]
-    MainRouteError(#[from] main_route::Error),
     #[error("Could not update content: {0}")]
     UpdateContentError(#[from] update_content_routes::Error),
     #[error("Unauthorized")]
@@ -137,25 +138,21 @@ enum Error {
     ClientError(String),
 }
 
-#[rocket::async_trait]
-impl<'r> Responder<'r, 'static> for Error {
-    fn respond_to(
-        self,
-        _: &'r Request<'_>,
-    ) -> response::Result<'static> {
+impl IntoResponse for Error {
+    fn into_response(self) -> Response {
         match self {
             Self::Unauthorized => {
                 warn!("{self}");
-                Err(Status::Unauthorized)
+                StatusCode::UNAUTHORIZED.into()
             },
             #[cfg(feature = "templating")]
             Self::ClientError(_) => {
                 debug!("{self}");
-                Err(Status::BadRequest)
+                StatusCode::BAD_REQUEST.into()
             },
             _ => {
                 error(format!("{self}"));
-                Err(Status::InternalServerError)
+                StatusCode::INTERNAL_SERVER_ERROR.into()
             },
         }
     }

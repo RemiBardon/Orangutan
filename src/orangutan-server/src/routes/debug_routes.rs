@@ -1,11 +1,14 @@
 use std::sync::{Arc, RwLock};
 
+use axum::{routing::get, Router};
+use axum_extra::extract::PrivateCookieJar;
 use chrono::{DateTime, Utc};
 use lazy_static::lazy_static;
-use rocket::{get, http::CookieJar, routes, Route};
 
-use super::auth_routes::REVOKED_TOKENS;
-use crate::{request_guards::Token, Error};
+use crate::{
+    request_guards::{Token, REVOKED_TOKENS},
+    Error,
+};
 
 lazy_static! {
     /// A list of runtime errors, used to show error logs in an admin page
@@ -19,21 +22,21 @@ lazy_static! {
     pub(crate) static ref ACCESS_LOGS: Arc<RwLock<Vec<AccessLog>>> = Arc::default();
 }
 
-pub(super) fn routes() -> Vec<Route> {
-    let routes = routes![
-        clear_cookies,
-        get_user_info,
-        errors,
-        access_logs,
-        revoked_tokens,
-    ];
+pub(super) fn router() -> Router {
+    let mut router = Router::new()
+        .route("/clear-cookies", get(clear_cookies).put(clear_cookies))
+        .route("/_info", get(get_user_info))
+        .route("/_errors", get(errors))
+        .route("/_access-logs", get(access_logs))
+        .route("/_revoked-tokens", get(revoked_tokens));
     #[cfg(feature = "token-generator")]
-    let routes = vec![routes, routes![
-        token_generator::token_generation_form,
-        token_generator::generate_token,
-    ]]
-    .concat();
-    routes
+    {
+        router = router.route(
+            "/_generate-token",
+            get(token_generator::token_generation_form).post(token_generator::generate_token),
+        );
+    }
+    router
 }
 
 #[cfg(feature = "templating")]
@@ -44,8 +47,7 @@ pub(super) fn templates() -> Vec<(&'static str, &'static str)> {
     )]
 }
 
-#[get("/clear-cookies")]
-fn clear_cookies(cookies: &CookieJar<'_>) -> &'static str {
+fn clear_cookies(cookies: PrivateCookieJar) -> &'static str {
     for cookie in cookies.iter().map(Clone::clone) {
         cookies.remove(cookie);
     }
@@ -53,7 +55,6 @@ fn clear_cookies(cookies: &CookieJar<'_>) -> &'static str {
     "Success"
 }
 
-#[get("/_info")]
 fn get_user_info(token: Option<Token>) -> String {
     match token {
         Some(Token { biscuit, .. }) => format!(
@@ -73,7 +74,6 @@ pub struct ErrorLog {
     pub line: String,
 }
 
-#[get("/_errors")]
 fn errors(token: Token) -> Result<String, Error> {
     if !token.profiles().contains(&"*".to_owned()) {
         Err(Error::Unauthorized)?
@@ -100,7 +100,6 @@ pub struct AccessLog {
     pub path: String,
 }
 
-#[get("/_access-logs")]
 fn access_logs(token: Token) -> Result<String, Error> {
     if !token.profiles().contains(&"*".to_owned()) {
         Err(Error::Unauthorized)?
@@ -139,7 +138,6 @@ pub fn log_access(
     })
 }
 
-#[get("/_revoked-tokens")]
 fn revoked_tokens(token: Token) -> Result<String, Error> {
     if !token.profiles().contains(&"*".to_owned()) {
         Err(Error::Forbidden)?
@@ -156,49 +154,45 @@ fn revoked_tokens(token: Token) -> Result<String, Error> {
 
 #[cfg(feature = "token-generator")]
 pub mod token_generator {
+    use axum::{extract::State, Form};
+    use axum_extra::response::Html;
     use orangutan_refresh_token::RefreshToken;
-    use rocket::{
-        form::{Form, Strict},
-        get, post,
-        response::content::RawHtml,
-        FromForm, State,
-    };
+    use serde::Deserialize;
 
     use crate::{
         context,
         request_guards::Token,
         util::{templating::render, WebsiteRoot},
-        Error,
+        AppState, Error,
     };
 
     fn token_generation_form_(
-        tera: &State<tera::Tera>,
+        tera: &tera::Tera,
         link: Option<String>,
         base_url: &str,
-    ) -> Result<RawHtml<String>, Error> {
+    ) -> Result<Html<String>, Error> {
         let html = render(
             tera,
             "generate-token.html",
             context! { page_title: "Access token generator", link, base_url },
         )?;
 
-        Ok(RawHtml(html))
+        Ok(Html(html))
     }
 
-    #[get("/_generate-token")]
     pub fn token_generation_form(
         token: Token,
-        tera: &State<tera::Tera>,
+        State(app_state): State<AppState>,
         website_root: WebsiteRoot,
-    ) -> Result<RawHtml<String>, Error> {
+    ) -> Result<Html<String>, Error> {
         if !token.profiles().contains(&"*".to_owned()) {
             Err(Error::Unauthorized)?
         }
 
-        token_generation_form_(tera, None, &website_root)
+        token_generation_form_(&app_state.tera, None, &website_root)
     }
 
-    #[derive(FromForm)]
+    #[derive(Deserialize)]
     pub struct GenerateTokenForm {
         ttl: String,
         name: String,
@@ -206,13 +200,12 @@ pub mod token_generator {
         url: String,
     }
 
-    #[post("/_generate-token", data = "<form>")]
     pub fn generate_token(
         token: Token,
-        tera: &State<tera::Tera>,
-        form: Form<Strict<GenerateTokenForm>>,
+        State(app_state): State<AppState>,
+        Form(form): Form<GenerateTokenForm>,
         website_root: WebsiteRoot,
-    ) -> Result<RawHtml<String>, Error> {
+    ) -> Result<Html<String>, Error> {
         if !token.profiles().contains(&"*".to_owned()) {
             Err(Error::Unauthorized)?
         }
@@ -229,6 +222,6 @@ pub mod token_generator {
         let token_base64 = token.as_base64()?;
         let link = format!("{}?refresh_token={token_base64}", form.url);
 
-        token_generation_form_(tera, Some(link), &website_root)
+        token_generation_form_(&app_state.tera, Some(link), &website_root)
     }
 }
