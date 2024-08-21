@@ -9,8 +9,10 @@ pub mod update_content_routes;
 
 use axum::Router;
 
-pub(super) fn router() -> Router {
-    Router::new()
+use crate::AppState;
+
+pub(super) fn router() -> Router<AppState> {
+    Router::<AppState>::new()
         .merge(main_route::router())
         .merge(update_content_routes::router())
         .merge(debug_routes::router())

@@ -406,14 +406,14 @@ pub fn trash_outdated_websites() -> Result<State, Error> {
         hugo_config_generated: HUGO_CONFIG_GENERATED.load(Ordering::Relaxed),
         data_files_generated: DATA_FILES_GENERATED.load(Ordering::Relaxed),
         generated_websites: GENERATED_WEBSITES.lock().unwrap().to_owned(),
-        used_profiles: super::USED_PROFILES.lock().unwrap().to_owned(),
+        used_profiles: super::USED_PROFILES.read().unwrap().to_owned(),
     };
 
     // Clear caches
     HUGO_CONFIG_GENERATED.store(false, Ordering::Relaxed);
     DATA_FILES_GENERATED.store(false, Ordering::Relaxed);
     GENERATED_WEBSITES.lock().unwrap().clear();
-    *super::USED_PROFILES.lock().unwrap() = None;
+    *super::USED_PROFILES.write().unwrap() = None;
 
     Ok(state)
 }
@@ -428,7 +428,7 @@ pub fn recover_trash(state: State) -> Result<(), Error> {
     HUGO_CONFIG_GENERATED.store(state.hugo_config_generated, Ordering::Relaxed);
     DATA_FILES_GENERATED.store(state.data_files_generated, Ordering::Relaxed);
     *GENERATED_WEBSITES.lock().unwrap() = state.generated_websites;
-    *super::USED_PROFILES.lock().unwrap() = state.used_profiles;
+    *super::USED_PROFILES.write().unwrap() = state.used_profiles;
 
     Ok(())
 }
@@ -456,4 +456,6 @@ pub enum Error {
     CannotCreateHugoConfigFile(io::Error),
     #[error("IO error: {0}")]
     IOError(#[from] io::Error),
+    #[error("Could not read page metadata: JSON error: {0}")]
+    CannotReadPageMetadata(serde_json::Error),
 }

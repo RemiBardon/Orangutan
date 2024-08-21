@@ -1,17 +1,21 @@
 use std::{
     collections::{HashMap, HashSet},
     ops::Deref,
+    str::FromStr,
     sync::RwLock,
     time::SystemTime,
 };
 
 use axum::{
-    extract::{rejection::QueryRejection, FromRequestParts, Query, Request},
-    http::{request, HeaderMap, StatusCode, Uri},
+    extract::{rejection::QueryRejection, FromRef, FromRequestParts, Query, Request, State},
+    http::{request, HeaderMap, HeaderValue, StatusCode, Uri},
     middleware::Next,
     response::{IntoResponse, Redirect, Response},
 };
-use axum_extra::extract::PrivateCookieJar;
+use axum_extra::{
+    either::Either,
+    extract::{cookie::Key, PrivateCookieJar},
+};
 use biscuit_auth::{macros::authorizer, Biscuit};
 use lazy_static::lazy_static;
 use tracing::{debug, trace};
@@ -19,6 +23,7 @@ use tracing::{debug, trace};
 use crate::{
     config::*,
     util::{add_cookie, add_padding, error, profiles},
+    AppState,
 };
 
 lazy_static! {
@@ -56,7 +61,7 @@ impl IntoResponse for TokenError {
     fn into_response(self) -> Response {
         match self {
             Self::InvalidQuery(err) => err.into_response(),
-            Self::Unauthorized => StatusCode::UNAUTHORIZED.into(),
+            Self::Unauthorized => StatusCode::UNAUTHORIZED.into_response(),
         }
     }
 }
@@ -65,6 +70,7 @@ impl IntoResponse for TokenError {
 impl<S> FromRequestParts<S> for Token
 where
     S: Send + Sync,
+    Key: FromRef<S>,
 {
     type Rejection = TokenError;
 
@@ -113,7 +119,10 @@ where
         }
 
         // Check cookies
-        let cookies = PrivateCookieJar::from_request_parts(parts, state).await?;
+        let cookies = PrivateCookieJar::from_request_parts(parts, state)
+            .await
+            .map_err(|err| match err {})
+            .unwrap();
         if let Some(cookie) = cookies.get(TOKEN_COOKIE_NAME) {
             debug!("Found token cookie");
             let token: &str = cookie.value();
@@ -127,13 +136,24 @@ where
         }
 
         // Check authorization headers
-        let headers = HeaderMap::from_request_parts(parts, state).await?;
-        let authorization_headers: Vec<&str> = headers.get("Authorization").collect();
+        let headers = HeaderMap::from_request_parts(parts, state)
+            .await
+            .map_err(|err| match err {})
+            .unwrap();
+        let authorization_headers: Vec<&HeaderValue> =
+            headers.get_all("Authorization").into_iter().collect();
         debug!(
             "{} 'Authorization' headers provided",
             authorization_headers.len()
         );
         for authorization in authorization_headers {
+            let authorization = match authorization.to_str() {
+                Ok(str) => str,
+                Err(_err) => {
+                    trace!("Skipped 1 authorization header because it contains non visible ASCII chars.");
+                    continue;
+                },
+            };
             if authorization.starts_with("Bearer ") {
                 debug!("Bearer Authorization provided");
                 let token: &str = authorization.trim_start_matches("Bearer ");
@@ -162,16 +182,33 @@ where
     }
 }
 
-pub fn handle_refresh_token(
-    uri: Uri,
+pub async fn handle_refresh_token(
+    State(_app_state): State<AppState>,
     cookies: PrivateCookieJar,
-    Query(refresh_token): Query<&str>,
-    Query(force): Query<Option<bool>>,
+    // Query(refresh_token): Query<Option<String>>,
+    // Query(force): Query<Option<bool>>,
     token: Option<Token>,
+    req: Request,
     next: Next,
-) -> Result<Redirect, StatusCode> {
+) -> Result<Either<Response, Redirect>, StatusCode> {
+    let refresh_token: Option<String> = None;
+    let force = None;
+    let Some(refresh_token) = refresh_token else {
+        return Ok(Either::E1(next.run(req).await));
+    };
+
+    // NOTE: We're sure there is a query since `refresh_token` is `Some`.
+    let query = req.uri().query().unwrap();
+    let mut query: HashMap<String, String> = match serde_urlencoded::from_str(query) {
+        Ok(params) => params,
+        Err(err) => {
+            trace!("Invalid query: {err}");
+            return Err(StatusCode::BAD_REQUEST);
+        },
+    };
+
     // URL-decode the string.
-    let mut refresh_token: String = urlencoding::decode(refresh_token).unwrap().to_string();
+    let mut refresh_token: String = urlencoding::decode(&refresh_token).unwrap().to_string();
 
     // Because tokens can be passed as URL query params,
     // they might have the "=" padding characters removed.
@@ -225,22 +262,21 @@ pub fn handle_refresh_token(
         return Err(StatusCode::UNAUTHORIZED);
     }
 
-    fn redirect_to_same_page_without_query_param(uri: &Uri) -> Result<Redirect, StatusCode> {
-        let query_segs: Vec<String> = uri
-            .query()
-            .unwrap_or_default()
-            .raw_segments()
-            .filter(|s| !s.starts_with(format!("{REFRESH_TOKEN_QUERY_PARAM_NAME}=").as_str()))
-            .map(ToString::to_string)
-            .collect();
-        match Uri::parse_owned(format!("{}?{}", uri.path(), query_segs.join("&"))) {
+    fn redirect_to_same_page_without_query_param(
+        uri: &Uri,
+        query: &mut HashMap<String, String>,
+    ) -> Result<Redirect, StatusCode> {
+        query.remove(REFRESH_TOKEN_QUERY_PARAM_NAME);
+        // TODO: Check if we need to URL-encode keys and values or if they are still encoded.
+        let query_segs: Vec<String> = query.iter().map(|(k, v)| format!("{k}={v}")).collect();
+        match Uri::from_str(&format!("{}?{}", uri.path(), query_segs.join("&"))) {
             Ok(redirect_to) => {
                 debug!("Redirecting to <{redirect_to}> from <{uri}>…");
-                Ok(Redirect::found(redirect_to.path().to_string()))
+                Ok(Redirect::to(redirect_to.path().to_string().as_str()))
             },
             Err(err) => {
                 error(format!("{err}"));
-                Err(StatusCode::InternalServerError)
+                Err(StatusCode::INTERNAL_SERVER_ERROR)
             },
         }
     }
@@ -252,7 +288,8 @@ pub fn handle_refresh_token(
             //   access link and send it to the super admin's device, which increases the potential
             //   for such a sensitive link to be intercepted. As a safety measure, we don't do anything
             //   if a super admin uses a refresh token link.
-            return redirect_to_same_page_without_query_param(&uri);
+            return redirect_to_same_page_without_query_param(req.uri(), &mut query)
+                .map(Either::E2);
         }
     }
 
@@ -264,7 +301,7 @@ pub fn handle_refresh_token(
         Ok(biscuit) => biscuit,
         Err(err) => {
             error(format!("Error: Could not append block to biscuit: {err}"));
-            return Err(StatusCode::InternalServerError);
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
         },
     };
     debug!("Successfully created new biscuit from refresh token");
@@ -273,7 +310,7 @@ pub fn handle_refresh_token(
     add_cookie(&new_biscuit, cookies);
 
     // Redirect to the same page without the refresh token query param
-    redirect_to_same_page_without_query_param(&uri)
+    redirect_to_same_page_without_query_param(req.uri(), &mut query).map(Either::E2)
 }
 
 fn merge_biscuits(

@@ -7,7 +7,7 @@ use lazy_static::lazy_static;
 
 use crate::{
     request_guards::{Token, REVOKED_TOKENS},
-    Error,
+    AppState, Error,
 };
 
 lazy_static! {
@@ -22,8 +22,8 @@ lazy_static! {
     pub(crate) static ref ACCESS_LOGS: Arc<RwLock<Vec<AccessLog>>> = Arc::default();
 }
 
-pub(super) fn router() -> Router {
-    let mut router = Router::new()
+pub(super) fn router() -> Router<AppState> {
+    let mut router = Router::<AppState>::new()
         .route("/clear-cookies", get(clear_cookies).put(clear_cookies))
         .route("/_info", get(get_user_info))
         .route("/_errors", get(errors))
@@ -47,15 +47,17 @@ pub(super) fn templates() -> Vec<(&'static str, &'static str)> {
     )]
 }
 
-fn clear_cookies(cookies: PrivateCookieJar) -> &'static str {
-    for cookie in cookies.iter().map(Clone::clone) {
-        cookies.remove(cookie);
+// #[axum::debug_handler]
+async fn clear_cookies(cookie_jar: PrivateCookieJar) -> (PrivateCookieJar, String) {
+    let mut empty_jar = cookie_jar.clone();
+    for cookie in cookie_jar.iter() {
+        empty_jar = empty_jar.remove(cookie);
     }
 
-    "Success"
+    (empty_jar, "Success".to_string())
 }
 
-fn get_user_info(token: Option<Token>) -> String {
+async fn get_user_info(token: Option<Token>) -> String {
     match token {
         Some(Token { biscuit, .. }) => format!(
             "**Biscuit:**\n\n{}\n\n\
@@ -74,7 +76,7 @@ pub struct ErrorLog {
     pub line: String,
 }
 
-fn errors(token: Token) -> Result<String, Error> {
+async fn errors(token: Token) -> Result<String, Error> {
     if !token.profiles().contains(&"*".to_owned()) {
         Err(Error::Unauthorized)?
     }
@@ -100,7 +102,7 @@ pub struct AccessLog {
     pub path: String,
 }
 
-fn access_logs(token: Token) -> Result<String, Error> {
+async fn access_logs(token: Token) -> Result<String, Error> {
     if !token.profiles().contains(&"*".to_owned()) {
         Err(Error::Unauthorized)?
     }
@@ -138,7 +140,7 @@ pub fn log_access(
     })
 }
 
-fn revoked_tokens(token: Token) -> Result<String, Error> {
+async fn revoked_tokens(token: Token) -> Result<String, Error> {
     if !token.profiles().contains(&"*".to_owned()) {
         Err(Error::Forbidden)?
     }
@@ -159,12 +161,7 @@ pub mod token_generator {
     use orangutan_refresh_token::RefreshToken;
     use serde::Deserialize;
 
-    use crate::{
-        context,
-        request_guards::Token,
-        util::{templating::render, WebsiteRoot},
-        AppState, Error,
-    };
+    use crate::{context, request_guards::Token, util::templating::render, AppState, Error};
 
     fn token_generation_form_(
         tera: &tera::Tera,
@@ -180,16 +177,15 @@ pub mod token_generator {
         Ok(Html(html))
     }
 
-    pub fn token_generation_form(
+    pub async fn token_generation_form(
         token: Token,
         State(app_state): State<AppState>,
-        website_root: WebsiteRoot,
     ) -> Result<Html<String>, Error> {
         if !token.profiles().contains(&"*".to_owned()) {
             Err(Error::Unauthorized)?
         }
 
-        token_generation_form_(&app_state.tera, None, &website_root)
+        token_generation_form_(&app_state.tera, None, &app_state.website_root)
     }
 
     #[derive(Deserialize)]
@@ -200,11 +196,10 @@ pub mod token_generator {
         url: String,
     }
 
-    pub fn generate_token(
+    pub async fn generate_token(
         token: Token,
         State(app_state): State<AppState>,
         Form(form): Form<GenerateTokenForm>,
-        website_root: WebsiteRoot,
     ) -> Result<Html<String>, Error> {
         if !token.profiles().contains(&"*".to_owned()) {
             Err(Error::Unauthorized)?
@@ -222,6 +217,6 @@ pub mod token_generator {
         let token_base64 = token.as_base64()?;
         let link = format!("{}?refresh_token={token_base64}", form.url);
 
-        token_generation_form_(&app_state.tera, Some(link), &website_root)
+        token_generation_form_(&app_state.tera, Some(link), &app_state.website_root)
     }
 }

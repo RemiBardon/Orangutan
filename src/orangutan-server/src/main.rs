@@ -3,12 +3,16 @@ mod request_guards;
 mod routes;
 mod util;
 
+use std::{fs, process::ExitCode};
+
 use axum::{
-    http::{Response, StatusCode},
-    response::IntoResponse,
-    routing::get,
+    extract::FromRef,
+    http::StatusCode,
+    middleware,
+    response::{IntoResponse, Response},
     Router,
 };
+use axum_extra::extract::cookie::Key;
 use orangutan_helpers::{
     generate::{self, *},
     website_id::WebsiteId,
@@ -20,32 +24,43 @@ use tower_http::{services::ServeFile, trace::TraceLayer};
 use tracing::debug;
 use tracing::{info, warn};
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
+use util::WebsiteRoot;
 
 #[cfg(feature = "templating")]
 use crate::util::templating;
-use crate::{
-    config::NOT_FOUND_FILE,
-    routes::{main_route, update_content_routes},
-    util::error,
-};
+use crate::{config::NOT_FOUND_FILE, routes::update_content_routes, util::error};
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 struct AppState {
+    website_root: WebsiteRoot,
+    cookie_key: Key,
     #[cfg(feature = "templating")]
     tera: Tera,
 }
 
-#[tokio::main]
-async fn main() {
-    // build our application with a single route
-    let app = Router::new().nest("/", routes::router()).layer(
-        ServiceBuilder::new()
-            .layer(TraceLayer::new_for_http())
-            .layer(handle_refresh_token),
-    );
-    // .register("/", catchers![unauthorized, forbidden, not_found])
+impl FromRef<AppState> for Key {
+    fn from_ref(state: &AppState) -> Self {
+        state.cookie_key.clone()
+    }
+}
 
-    let mut app_state = AppState::default();
+#[tokio::main]
+async fn main() -> ExitCode {
+    let website_root = match WebsiteRoot::try_from_env() {
+        Ok(r) => r,
+        Err(err) => {
+            tracing::error!("{err}");
+            return ExitCode::FAILURE;
+        },
+    };
+
+    let mut app_state = AppState {
+        website_root,
+        // FIXME: Use predefined key.
+        cookie_key: Key::generate(),
+        #[cfg(feature = "templating")]
+        tera: Default::default(),
+    };
 
     info!("Setting up tracing…");
     let subscriber = FmtSubscriber::builder()
@@ -59,20 +74,31 @@ async fn main() {
         info!("Initializing templating engine…");
         if let Err(err) = app_state.tera.add_raw_templates(routes::templates()) {
             tracing::error!("{err}");
-            std::process::exit(1)
+            return ExitCode::FAILURE;
         }
     }
 
+    let app = Router::new()
+        .nest("/", routes::router())
+        .layer(TraceLayer::new_for_http())
+        .route_layer(middleware::from_fn_with_state(
+            app_state.clone(),
+            handle_refresh_token,
+        ))
+        .with_state(app_state);
+    // .register("/", catchers![unauthorized, forbidden, not_found])
+
     info!("Generating default website");
     if let Err(err) = liftoff() {
-        panic!("{err}");
+        tracing::error!("{err}");
+        return ExitCode::FAILURE;
     }
-
-    let app = app.with_state(app_state);
 
     // Run our app with hyper, listening globally on port 8080.
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await.unwrap();
     axum::serve(listener, app).await.unwrap();
+
+    return ExitCode::SUCCESS;
 }
 
 fn liftoff() -> Result<(), Error> {
@@ -102,19 +128,28 @@ async fn not_found() -> Result<ServeFile, &'static str> {
     let website_dir = match generate_website_if_needed(&website_id) {
         Ok(dir) => dir,
         Err(err) => {
-            error(format!("Could not get default website directory: {}", err));
+            error(format!("Could not get default website directory: {err}"));
             return Err("This page doesn't exist or you are not allowed to see it.");
         },
     };
     let file_path = website_dir.join(NOT_FOUND_FILE);
-    ServeFile::open(file_path.clone()).await.map_err(|err| {
-        error(format!(
-            "Could not read \"not found\" file at <{}>: {}",
-            file_path.display(),
-            err
-        ));
-        "This page doesn't exist or you are not allowed to see it."
-    })
+    match fs::exists(&file_path) {
+        Ok(true) => Ok(ServeFile::new(file_path.clone())),
+        Ok(false) => {
+            error(format!(
+                "Could not read \"not found\" file at <{}>: File doesn't exist.",
+                file_path.display(),
+            ));
+            Err("This page doesn't exist or you are not allowed to see it.")
+        },
+        Err(err) => {
+            error(format!(
+                "Could not read \"not found\" file at <{}>: {err}",
+                file_path.display(),
+            ));
+            Err("This page doesn't exist or you are not allowed to see it.")
+        },
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -143,16 +178,16 @@ impl IntoResponse for Error {
         match self {
             Self::Unauthorized => {
                 warn!("{self}");
-                StatusCode::UNAUTHORIZED.into()
+                StatusCode::UNAUTHORIZED.into_response()
             },
             #[cfg(feature = "templating")]
             Self::ClientError(_) => {
                 debug!("{self}");
-                StatusCode::BAD_REQUEST.into()
+                StatusCode::BAD_REQUEST.into_response()
             },
             _ => {
                 error(format!("{self}"));
-                StatusCode::INTERNAL_SERVER_ERROR.into()
+                StatusCode::INTERNAL_SERVER_ERROR.into_response()
             },
         }
     }
