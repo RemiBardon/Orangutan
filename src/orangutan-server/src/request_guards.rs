@@ -18,6 +18,7 @@ use axum_extra::{
 };
 use biscuit_auth::{macros::authorizer, Biscuit};
 use lazy_static::lazy_static;
+use serde::Deserialize;
 use tracing::{debug, trace};
 
 use crate::{
@@ -182,18 +183,29 @@ where
     }
 }
 
+#[derive(Deserialize)]
+pub struct RefreshTokenQuery {
+    #[serde(default)]
+    refresh_token: Option<String>,
+    #[serde(default)]
+    force: bool,
+}
+
 pub async fn handle_refresh_token(
     State(_app_state): State<AppState>,
     cookies: PrivateCookieJar,
-    // Query(refresh_token): Query<Option<String>>,
-    // Query(force): Query<Option<bool>>,
+    Query(RefreshTokenQuery {
+        refresh_token,
+        force,
+        ..
+    }): Query<RefreshTokenQuery>,
     token: Option<Token>,
     req: Request,
     next: Next,
-) -> Result<Either<Response, Redirect>, StatusCode> {
-    let refresh_token: Option<String> = None;
-    let force = None;
+) -> Result<Either<Response, (PrivateCookieJar, Redirect)>, StatusCode> {
+    trace!("Running refresh token middleware…");
     let Some(refresh_token) = refresh_token else {
+        trace!("Refresh token middleware found no refresh token, forwarding…");
         return Ok(Either::E1(next.run(req).await));
     };
 
@@ -265,30 +277,35 @@ pub async fn handle_refresh_token(
     fn redirect_to_same_page_without_query_param(
         uri: &Uri,
         query: &mut HashMap<String, String>,
-    ) -> Result<Redirect, StatusCode> {
+        cookies: PrivateCookieJar,
+    ) -> Result<(PrivateCookieJar, Redirect), StatusCode> {
         query.remove(REFRESH_TOKEN_QUERY_PARAM_NAME);
         // TODO: Check if we need to URL-encode keys and values or if they are still encoded.
         let query_segs: Vec<String> = query.iter().map(|(k, v)| format!("{k}={v}")).collect();
-        match Uri::from_str(&format!("{}?{}", uri.path(), query_segs.join("&"))) {
-            Ok(redirect_to) => {
-                debug!("Redirecting to <{redirect_to}> from <{uri}>…");
-                Ok(Redirect::to(redirect_to.path().to_string().as_str()))
-            },
-            Err(err) => {
-                error(format!("{err}"));
-                Err(StatusCode::INTERNAL_SERVER_ERROR)
-            },
-        }
+        let redirect_to = if query_segs.is_empty() {
+            uri.path().to_string()
+        } else {
+            format!("{}?{}", uri.path(), query_segs.join("&"))
+        };
+        let redirect_to = Uri::from_str(&redirect_to).map_err(|err| {
+            error(format!("{err}"));
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+        debug!("Redirecting to <{redirect_to}> from <{uri}>…");
+        Ok((
+            cookies,
+            Redirect::to(redirect_to.path().to_string().as_str()),
+        ))
     }
 
     if let Some(token) = token {
-        if token.profiles().contains(&"*".to_owned()) && !force.unwrap_or(false) {
+        if token.profiles().contains(&"*".to_owned()) && !force {
             // NOTE: If a super admin generates an access link and accidentally opens it,
             //   they loose their super admin profile. Then we must regenerate a super admin
             //   access link and send it to the super admin's device, which increases the potential
             //   for such a sensitive link to be intercepted. As a safety measure, we don't do anything
             //   if a super admin uses a refresh token link.
-            return redirect_to_same_page_without_query_param(req.uri(), &mut query)
+            return redirect_to_same_page_without_query_param(req.uri(), &mut query, cookies)
                 .map(Either::E2);
         }
     }
@@ -307,10 +324,10 @@ pub async fn handle_refresh_token(
     debug!("Successfully created new biscuit from refresh token");
 
     // Save token to a HTTP Cookie
-    add_cookie(&new_biscuit, cookies);
+    let cookies = add_cookie(&new_biscuit, cookies)?;
 
     // Redirect to the same page without the refresh token query param
-    redirect_to_same_page_without_query_param(req.uri(), &mut query).map(Either::E2)
+    redirect_to_same_page_without_query_param(req.uri(), &mut query, cookies).map(Either::E2)
 }
 
 fn merge_biscuits(

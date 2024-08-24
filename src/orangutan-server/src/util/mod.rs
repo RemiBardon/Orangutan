@@ -3,6 +3,7 @@ pub mod templating;
 #[cfg(feature = "token-generator")]
 mod website_root;
 
+use axum::http::StatusCode;
 use axum_extra::extract::{
     cookie::{Cookie, SameSite},
     PrivateCookieJar,
@@ -59,25 +60,25 @@ pub fn add_padding(base64_string: &str) -> String {
     }
 }
 
+/// Returns a new [PrivateCookieJar] which _must_ be returned from the handler
+/// as part of the response for the changes to be propagated.
+/// See [PrivateCookieJar]'s documentation for examples.
 pub fn add_cookie(
     biscuit: &Biscuit,
     cookies: PrivateCookieJar,
-) {
-    match biscuit.to_base64() {
-        Ok(base64) => {
-            cookies.add(
-                Cookie::build((TOKEN_COOKIE_NAME, base64))
-                    .path("/")
-                    .max_age(Duration::days(365 * 5))
-                    .http_only(true)
-                    .secure(true)
-                    .same_site(SameSite::Strict),
-            );
-        },
-        Err(err) => {
-            error(format!("Error setting token cookie: {err}"));
-        },
-    }
+) -> Result<PrivateCookieJar, StatusCode> {
+    let base64 = biscuit.to_base64().map_err(|err| {
+        error(format!("Error setting token cookie: {err}"));
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    let cookie = Cookie::build((TOKEN_COOKIE_NAME, base64))
+        .path("/")
+        .max_age(Duration::days(365 * 5))
+        .http_only(true)
+        .secure(true)
+        .same_site(SameSite::Strict)
+        .build();
+    Ok(cookies.clone().add(cookie))
 }
 
 #[cfg(test)]

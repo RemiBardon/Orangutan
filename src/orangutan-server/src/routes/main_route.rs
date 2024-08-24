@@ -82,7 +82,7 @@ async fn handle_request(
         // If metadata can't be found, it means it's a static file
         trace!("File <{path}> did not explicitly allow profiles, serving static file");
         // TODO: Un-hardcode this value.
-        let res = serve_file(&website_dir, &uri).await;
+        let res = serve_file(&website_dir, &Uri::from_str(path).unwrap()).await;
         return Ok(Either::E1(res));
     };
 
