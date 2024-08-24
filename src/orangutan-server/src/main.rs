@@ -29,7 +29,7 @@ use tower_http::{
 #[cfg(feature = "templating")]
 use tracing::debug;
 use tracing::{info, warn};
-use tracing_subscriber::{EnvFilter, FmtSubscriber};
+use tracing_subscriber::EnvFilter;
 use util::WebsiteRoot;
 
 #[cfg(feature = "templating")]
@@ -69,10 +69,9 @@ async fn main() -> ExitCode {
     };
 
     info!("Setting up tracing…");
-    let subscriber = FmtSubscriber::builder()
+    tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
-        .finish();
-    tracing::subscriber::set_global_default(subscriber).expect("Failed to set tracing subscriber.");
+        .init();
 
     // Add support for templating if needed
     #[cfg(feature = "templating")]
