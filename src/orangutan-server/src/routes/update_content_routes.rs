@@ -1,4 +1,4 @@
-use axum::{extract::Path, http::StatusCode, routing::post, Router};
+use axum::{extract::Path, routing::post, Router};
 use orangutan_helpers::generate::{self, *};
 
 use crate::{error, request_guards::REVOKED_TOKENS, AppState};
@@ -34,11 +34,8 @@ async fn update_content_github() -> Result<(), crate::Error> {
     Ok(())
 }
 
-async fn update_content_other(Path(source): Path<String>) -> (StatusCode, String) {
-    (
-        StatusCode::BAD_REQUEST,
-        format!("Source '{source}' is not supported."),
-    )
+async fn update_content_other(Path(source): Path<String>) -> crate::Error {
+    crate::Error::ClientError(format!("Source '{source}' is not supported."))
 }
 
 #[derive(Debug, thiserror::Error)]

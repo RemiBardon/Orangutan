@@ -4,7 +4,7 @@ use axum::{
     extract::{Request, State},
     http::{
         header::{HeaderMap, ACCEPT},
-        StatusCode, Uri,
+        Uri,
     },
     response::Response,
     routing::get,
@@ -35,7 +35,7 @@ async fn handle_request(
     uri: Uri,
     token: Option<Token>,
     headers: HeaderMap,
-) -> Result<Either<Response<ServeFileSystemResponseBody>, StatusCode>, Error> {
+) -> Result<Either<Response<ServeFileSystemResponseBody>, Error>, Error> {
     // FIXME: Handle error
     let path = uri.path();
     trace!("GET {}", &path);
@@ -131,7 +131,7 @@ async fn handle_request(
     }
     if profile.is_none() {
         debug!("No profile allowed in token");
-        return Ok(Either::E2(StatusCode::NOT_FOUND));
+        return Ok(Either::E2(Error::Forbidden));
     }
 
     let res = serve_file(

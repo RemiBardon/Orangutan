@@ -3,7 +3,6 @@ pub mod templating;
 #[cfg(feature = "token-generator")]
 mod website_root;
 
-use axum::http::StatusCode;
 use axum_extra::extract::{
     cookie::{Cookie, SameSite},
     PrivateCookieJar,
@@ -66,10 +65,9 @@ pub fn add_padding(base64_string: &str) -> String {
 pub fn add_cookie(
     biscuit: &Biscuit,
     cookies: PrivateCookieJar,
-) -> Result<PrivateCookieJar, StatusCode> {
+) -> Result<PrivateCookieJar, crate::Error> {
     let base64 = biscuit.to_base64().map_err(|err| {
-        error(format!("Error setting token cookie: {err}"));
-        StatusCode::INTERNAL_SERVER_ERROR
+        crate::Error::InternalServerError(format!("Error setting token cookie: {err}"))
     })?;
     let cookie = Cookie::build((TOKEN_COOKIE_NAME, base64))
         .path("/")

@@ -6,8 +6,9 @@ mod util;
 use std::{fs, process::ExitCode};
 
 use axum::{
+    body::Body,
     extract::FromRef,
-    http::StatusCode,
+    http::{Request, StatusCode},
     middleware,
     response::{IntoResponse, Response},
     Router,
@@ -19,7 +20,12 @@ use orangutan_helpers::{
 };
 use request_guards::{handle_refresh_token, REVOKED_TOKENS};
 use tera::Tera;
-use tower_http::{services::ServeFile, trace::TraceLayer};
+use tokio::runtime::Handle;
+use tower::Service;
+use tower_http::{
+    services::{fs::ServeFileSystemResponseBody, ServeFile},
+    trace::TraceLayer,
+};
 #[cfg(feature = "templating")]
 use tracing::debug;
 use tracing::{info, warn};
@@ -110,44 +116,49 @@ fn liftoff() -> Result<(), Error> {
     Ok(())
 }
 
-// #[catch(401)]
-async fn unauthorized() -> Result<ServeFile, &'static str> {
-    not_found().await
-}
-
-// #[catch(403)]
-async fn forbidden() -> &'static str {
-    "403 Forbidden. Token revoked."
-}
-
 /// TODO: Re-enable Basic authentication
 ///   (`.raw_header("WWW-Authenticate", "Basic realm=\"This page is protected. Please log in.\"")`).
-// #[catch(404)]
-async fn not_found() -> Result<ServeFile, &'static str> {
+fn not_found() -> Result<Response<ServeFileSystemResponseBody>, Response> {
+    fn fallback() -> Response {
+        let mut fallback =
+            "This page doesn't exist or you are not allowed to see it.".into_response();
+        *fallback.status_mut() = StatusCode::NOT_FOUND;
+        fallback
+    }
+
     let website_id = WebsiteId::default();
-    let website_dir = match generate_website_if_needed(&website_id) {
-        Ok(dir) => dir,
-        Err(err) => {
-            error(format!("Could not get default website directory: {err}"));
-            return Err("This page doesn't exist or you are not allowed to see it.");
-        },
-    };
+    let website_dir = generate_website_if_needed(&website_id).map_err(|err| {
+        error(format!("Could not get default website directory: {err}"));
+        fallback()
+    })?;
+
     let file_path = website_dir.join(NOT_FOUND_FILE);
     match fs::exists(&file_path) {
-        Ok(true) => Ok(ServeFile::new(file_path.clone())),
+        Ok(true) => {
+            let res = tokio::task::block_in_place(move || {
+                Handle::current().block_on(async move {
+                    ServeFile::new(file_path.clone())
+                        .call(Request::new(Body::empty()))
+                        .await
+                        .map_err(|err| match err {})
+                        .unwrap()
+                })
+            });
+            Ok(res)
+        },
         Ok(false) => {
             error(format!(
                 "Could not read \"not found\" file at <{}>: File doesn't exist.",
                 file_path.display(),
             ));
-            Err("This page doesn't exist or you are not allowed to see it.")
+            Err(fallback())
         },
         Err(err) => {
             error(format!(
                 "Could not read \"not found\" file at <{}>: {err}",
                 file_path.display(),
             ));
-            Err("This page doesn't exist or you are not allowed to see it.")
+            Err(fallback())
         },
     }
 }
@@ -162,13 +173,14 @@ enum Error {
     Unauthorized,
     #[error("Forbidden")]
     Forbidden,
+    #[error("Token revoked")]
+    TokenRevoked,
     #[cfg(feature = "templating")]
     #[error("Templating error: {0}")]
     TemplatingError(#[from] templating::Error),
     #[cfg(feature = "templating")]
     #[error("Internal server error: {0}")]
     InternalServerError(String),
-    #[cfg(feature = "templating")]
     #[error("Client error: {0}")]
     ClientError(String),
 }
@@ -178,16 +190,23 @@ impl IntoResponse for Error {
         match self {
             Self::Unauthorized => {
                 warn!("{self}");
-                StatusCode::UNAUTHORIZED.into_response()
+                (StatusCode::UNAUTHORIZED, not_found()).into_response()
             },
-            #[cfg(feature = "templating")]
+            Self::Forbidden => {
+                warn!("{self}");
+                (StatusCode::FORBIDDEN, not_found()).into_response()
+            },
+            Self::TokenRevoked => {
+                warn!("{self}");
+                (StatusCode::FORBIDDEN, "403 Forbidden. Token revoked.").into_response()
+            },
             Self::ClientError(_) => {
                 debug!("{self}");
-                StatusCode::BAD_REQUEST.into_response()
+                (StatusCode::BAD_REQUEST, not_found()).into_response()
             },
             _ => {
                 error(format!("{self}"));
-                StatusCode::INTERNAL_SERVER_ERROR.into_response()
+                (StatusCode::INTERNAL_SERVER_ERROR, "I messed up. My bad 🙊").into_response()
             },
         }
     }

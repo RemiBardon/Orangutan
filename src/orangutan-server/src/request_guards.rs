@@ -8,7 +8,7 @@ use std::{
 
 use axum::{
     extract::{rejection::QueryRejection, FromRef, FromRequestParts, Query, Request, State},
-    http::{request, HeaderMap, HeaderValue, StatusCode, Uri},
+    http::{request, HeaderMap, HeaderValue, Uri},
     middleware::Next,
     response::{IntoResponse, Redirect, Response},
 };
@@ -23,7 +23,7 @@ use tracing::{debug, trace};
 
 use crate::{
     config::*,
-    util::{add_cookie, add_padding, error, profiles},
+    util::{add_cookie, add_padding, profiles},
     AppState,
 };
 
@@ -62,7 +62,7 @@ impl IntoResponse for TokenError {
     fn into_response(self) -> Response {
         match self {
             Self::InvalidQuery(err) => err.into_response(),
-            Self::Unauthorized => StatusCode::UNAUTHORIZED.into_response(),
+            Self::Unauthorized => crate::Error::Unauthorized.into_response(),
         }
     }
 }
@@ -85,13 +85,11 @@ where
         //     Err((StatusCode::BAD_REQUEST, "`User-Agent` header is missing"))
         // }
         let mut biscuit: Option<Biscuit> = None;
-        let mut should_save: bool = false;
 
         fn process_token(
             token: &str,
             token_source: &str,
             biscuit: &mut Option<Biscuit>,
-            should_save: &mut bool,
         ) {
             // Because tokens can be passed as URL query params,
             // they might have the "=" padding characters removed.
@@ -104,13 +102,11 @@ where
                 (None, Ok(new_biscuit)) => {
                     trace!("Found biscuit in {}", token_source);
                     *biscuit = Some(new_biscuit);
-                    *should_save = true;
                 },
                 (Some(acc), Ok(new_biscuit)) => {
                     trace!("Making bigger biscuit from {}", token_source);
                     if let Some(b) = merge_biscuits(&acc, &new_biscuit) {
                         *biscuit = Some(b);
-                        *should_save = true;
                     }
                 },
                 (_, Err(err)) => {
@@ -120,20 +116,18 @@ where
         }
 
         // Check cookies
-        let cookies = PrivateCookieJar::from_request_parts(parts, state)
+        // NOTE: For some reason, `rustc` can't figure out the type here… so we need to explicit it.
+        //   It worked before, so it will probably wagically work again later. It just doesn't work now.
+        let cookies = PrivateCookieJar::<Key>::from_request_parts(parts, state)
             .await
             .map_err(|err| match err {})
             .unwrap();
         if let Some(cookie) = cookies.get(TOKEN_COOKIE_NAME) {
-            debug!("Found token cookie");
+            trace!("Found token cookie");
             let token: &str = cookie.value();
-            // NOTE: We don't want to send a `Set-Cookie` header after finding a token in a cookie,
-            //   so let's create a temporary value which prevents `process_token` from changing
-            //   the global `should_save` value.
-            let mut should_save = false;
-            process_token(token, "token cookie", &mut biscuit, &mut should_save);
+            process_token(token, "token cookie", &mut biscuit);
         } else {
-            debug!("Did not find a token cookie");
+            trace!("Did not find a token cookie");
         }
 
         // Check authorization headers
@@ -143,7 +137,7 @@ where
             .unwrap();
         let authorization_headers: Vec<&HeaderValue> =
             headers.get_all("Authorization").into_iter().collect();
-        debug!(
+        trace!(
             "{} 'Authorization' headers provided",
             authorization_headers.len()
         );
@@ -156,9 +150,9 @@ where
                 },
             };
             if authorization.starts_with("Bearer ") {
-                debug!("Bearer Authorization provided");
+                trace!("Bearer Authorization provided");
                 let token: &str = authorization.trim_start_matches("Bearer ");
-                process_token(token, "Bearer token", &mut biscuit, &mut should_save);
+                process_token(token, "Bearer token", &mut biscuit);
             } else if authorization.starts_with("Basic ") {
                 debug!("Basic authentication disabled");
             }
@@ -167,19 +161,12 @@ where
         // Check query params
         let query = Query::<HashMap<String, String>>::from_request_parts(parts, state).await?;
         if let Some(token) = query.get(TOKEN_QUERY_PARAM_NAME) {
-            debug!("Found token query param");
-            process_token(&token, "token query param", &mut biscuit, &mut should_save);
+            trace!("Found token query param");
+            process_token(&token, "token query param", &mut biscuit);
         }
 
-        match biscuit {
-            Some(biscuit) => {
-                if should_save {
-                    add_cookie(&biscuit, cookies);
-                }
-                Ok(Token { biscuit })
-            },
-            None => Err(TokenError::Unauthorized),
-        }
+        let biscuit = biscuit.ok_or(TokenError::Unauthorized)?;
+        Ok(Token { biscuit })
     }
 }
 
@@ -202,7 +189,7 @@ pub async fn handle_refresh_token(
     token: Option<Token>,
     req: Request,
     next: Next,
-) -> Result<Either<Response, (PrivateCookieJar, Redirect)>, StatusCode> {
+) -> Result<Either<Response, (PrivateCookieJar, Redirect)>, crate::Error> {
     trace!("Running refresh token middleware…");
     let Some(refresh_token) = refresh_token else {
         trace!("Refresh token middleware found no refresh token, forwarding…");
@@ -211,13 +198,8 @@ pub async fn handle_refresh_token(
 
     // NOTE: We're sure there is a query since `refresh_token` is `Some`.
     let query = req.uri().query().unwrap();
-    let mut query: HashMap<String, String> = match serde_urlencoded::from_str(query) {
-        Ok(params) => params,
-        Err(err) => {
-            trace!("Invalid query: {err}");
-            return Err(StatusCode::BAD_REQUEST);
-        },
-    };
+    let mut query: HashMap<String, String> = serde_urlencoded::from_str(query)
+        .map_err(|err| crate::Error::ClientError(format!("Invalid query: {err}")))?;
 
     // URL-decode the string.
     let mut refresh_token: String = urlencoding::decode(&refresh_token).unwrap().to_string();
@@ -227,13 +209,11 @@ pub async fn handle_refresh_token(
     // We need to add them back.
     refresh_token = add_padding(&refresh_token);
 
-    let refresh_biscuit: Biscuit = match Biscuit::from_base64(refresh_token, ROOT_KEY.public()) {
-        Ok(biscuit) => biscuit,
-        Err(err) => {
-            debug!("Error decoding biscuit from base64: {}", err);
-            return Err(StatusCode::UNAUTHORIZED);
-        },
-    };
+    let refresh_biscuit: Biscuit =
+        Biscuit::from_base64(refresh_token, ROOT_KEY.public()).map_err(|err| {
+            debug!("Error decoding biscuit from base64: {err}");
+            crate::Error::Unauthorized
+        })?;
 
     // NOTE: This is just a hotfix. I had to quickly revoke a token. I'll improve this one day.
     trace!("Checking if refresh token is revoked…");
@@ -258,7 +238,7 @@ pub async fn handle_refresh_token(
             "Refresh token has been revoked ({})",
             String::from_utf8(revoked_id).unwrap_or("<could not format>".to_string()),
         );
-        return Err(StatusCode::FORBIDDEN);
+        return Err(crate::Error::TokenRevoked);
     }
 
     trace!("Checking if refresh token is valid or not");
@@ -271,14 +251,14 @@ pub async fn handle_refresh_token(
     );
     if let Err(err) = refresh_biscuit.authorize(&authorizer) {
         debug!("Refresh token is invalid: {}", err);
-        return Err(StatusCode::UNAUTHORIZED);
+        return Err(crate::Error::Unauthorized);
     }
 
     fn redirect_to_same_page_without_query_param(
         uri: &Uri,
         query: &mut HashMap<String, String>,
         cookies: PrivateCookieJar,
-    ) -> Result<(PrivateCookieJar, Redirect), StatusCode> {
+    ) -> Result<(PrivateCookieJar, Redirect), crate::Error> {
         query.remove(REFRESH_TOKEN_QUERY_PARAM_NAME);
         // TODO: Check if we need to URL-encode keys and values or if they are still encoded.
         let query_segs: Vec<String> = query.iter().map(|(k, v)| format!("{k}={v}")).collect();
@@ -287,10 +267,8 @@ pub async fn handle_refresh_token(
         } else {
             format!("{}?{}", uri.path(), query_segs.join("&"))
         };
-        let redirect_to = Uri::from_str(&redirect_to).map_err(|err| {
-            error(format!("{err}"));
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+        let redirect_to = Uri::from_str(&redirect_to)
+            .map_err(|err| crate::Error::InternalServerError(format!("{err}")))?;
         debug!("Redirecting to <{redirect_to}> from <{uri}>…");
         Ok((
             cookies,
@@ -314,13 +292,11 @@ pub async fn handle_refresh_token(
     let block_0 = refresh_biscuit.print_block_source(0).unwrap();
     let mut builder = Biscuit::builder();
     builder.add_code(block_0).unwrap();
-    let new_biscuit = match builder.build(&ROOT_KEY) {
-        Ok(biscuit) => biscuit,
-        Err(err) => {
-            error(format!("Error: Could not append block to biscuit: {err}"));
-            return Err(StatusCode::INTERNAL_SERVER_ERROR);
-        },
-    };
+    let new_biscuit = builder.build(&ROOT_KEY).map_err(|err| {
+        crate::Error::InternalServerError(format!(
+            "Error: Could not append block to biscuit: {err}"
+        ))
+    })?;
     debug!("Successfully created new biscuit from refresh token");
 
     // Save token to a HTTP Cookie
