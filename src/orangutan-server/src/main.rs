@@ -15,6 +15,7 @@ use axum::{
 };
 use axum_extra::extract::cookie::Key;
 use orangutan_helpers::{
+    config::COOKIE_KEY_ENV_VAR_NAME,
     generate::{self, *},
     website_id::WebsiteId,
 };
@@ -63,7 +64,13 @@ async fn main() -> ExitCode {
     let mut app_state = AppState {
         website_root,
         // FIXME: Use predefined key.
-        cookie_key: Key::generate(),
+        cookie_key: Key::from(
+            std::env::var(COOKIE_KEY_ENV_VAR_NAME)
+                .expect(&format!(
+                    "Environment variable '{COOKIE_KEY_ENV_VAR_NAME}' not defined."
+                ))
+                .as_bytes(),
+        ),
         #[cfg(feature = "templating")]
         tera: Default::default(),
     };
