@@ -5,7 +5,7 @@ mod website_root;
 
 use axum_extra::extract::{
     cookie::{Cookie, SameSite},
-    PrivateCookieJar,
+    CookieJar,
 };
 use biscuit_auth::{
     builder::{Fact, Term},
@@ -59,13 +59,13 @@ pub fn add_padding(base64_string: &str) -> String {
     }
 }
 
-/// Returns a new [PrivateCookieJar] which _must_ be returned from the handler
+/// Returns a new [CookieJar] which _must_ be returned from the handler
 /// as part of the response for the changes to be propagated.
-/// See [PrivateCookieJar]'s documentation for examples.
+/// See [CookieJar]'s documentation for examples.
 pub fn add_cookie(
     biscuit: &Biscuit,
-    cookies: PrivateCookieJar,
-) -> Result<PrivateCookieJar, crate::Error> {
+    cookies: CookieJar,
+) -> Result<CookieJar, crate::Error> {
     let base64 = biscuit.to_base64().map_err(|err| {
         crate::Error::InternalServerError(format!("Error setting token cookie: {err}"))
     })?;

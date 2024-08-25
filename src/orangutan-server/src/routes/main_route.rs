@@ -36,7 +36,6 @@ async fn handle_request(
     token: Option<Token>,
     headers: HeaderMap,
 ) -> Result<Either<Response<ServeFileSystemResponseBody>, Error>, Error> {
-    // FIXME: Handle error
     let path = uri.path();
     trace!("GET {}", &path);
 
@@ -48,10 +47,20 @@ async fn handle_request(
     // Log access only if the page is HTML.
     // WARN: This solution is far from perfect as someone requesting a page without setting the `Accept` header
     //   would not be logged even though they'd get the file back.
-    let a = "FIXME: Remove force unwrap";
     let accept = headers
         .get(ACCEPT)
-        .map(|value| Mime::from_str(value.to_str().expect("FIXME: Remove this force unwrap")).ok())
+        .map(|value| {
+            value
+                .to_str()
+                .inspect_err(|err| debug!("{value:?} could not be mapped to a string: {err}"))
+                .ok()
+        })
+        .flatten()
+        .map(|value| {
+            Mime::from_str(value)
+                .inspect_err(|err| debug!("{value:?} could not be mapped to a MIME type: {err}"))
+                .ok()
+        })
         .flatten();
     if accept.is_some_and(|m| m.type_() == mime::HTML) {
         log_access(user_profiles.to_owned(), path.to_owned());

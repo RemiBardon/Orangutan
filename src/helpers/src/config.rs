@@ -6,7 +6,6 @@ pub const THEME_NAME: &str = "Orangutan";
 pub const DATA_FILE_EXTENSION: &str = "orangutan";
 pub const DEFAULT_PROFILE: &str = "_default";
 pub const ROOT_KEY_NAME: &'static str = "_biscuit_root";
-pub const COOKIE_KEY_ENV_VAR_NAME: &'static str = "COOKIE_ENCRYPTION_KEY";
 
 pub(super) const WEBSITE_DIR_NAME: &'static str = "website";
 

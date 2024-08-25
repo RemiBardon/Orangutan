@@ -10,7 +10,7 @@ resolver = "2"
 
 [workspace.dependencies]
 axum = { version = "0.7", features = ["macros"] }
-axum-extra = { version = "0.9", features = ["cookie-private"] }
+axum-extra = { version = "0.9", features = ["cookie"] }
 base64 = "0.22"
 biscuit-auth = "5"
 chrono = "0.4"

@@ -7,19 +7,16 @@ use std::{fs, process::ExitCode};
 
 use axum::{
     body::Body,
-    extract::FromRef,
     http::{Request, StatusCode},
     middleware,
     response::{IntoResponse, Response},
     Router,
 };
-use axum_extra::extract::cookie::Key;
 use orangutan_helpers::{
-    config::COOKIE_KEY_ENV_VAR_NAME,
     generate::{self, *},
     website_id::WebsiteId,
 };
-use request_guards::{handle_refresh_token, migrate_token, REVOKED_TOKENS};
+use request_guards::{handle_refresh_token, REVOKED_TOKENS};
 use tera::Tera;
 use tokio::runtime::Handle;
 use tower::Service;
@@ -40,15 +37,8 @@ use crate::{config::NOT_FOUND_FILE, routes::update_content_routes, util::error};
 #[derive(Clone)]
 struct AppState {
     website_root: WebsiteRoot,
-    cookie_key: Key,
     #[cfg(feature = "templating")]
     tera: Tera,
-}
-
-impl FromRef<AppState> for Key {
-    fn from_ref(state: &AppState) -> Self {
-        state.cookie_key.clone()
-    }
 }
 
 #[tokio::main]
@@ -63,14 +53,6 @@ async fn main() -> ExitCode {
 
     let mut app_state = AppState {
         website_root,
-        // FIXME: Use predefined key.
-        cookie_key: Key::from(
-            std::env::var(COOKIE_KEY_ENV_VAR_NAME)
-                .expect(&format!(
-                    "Environment variable '{COOKIE_KEY_ENV_VAR_NAME}' not defined."
-                ))
-                .as_bytes(),
-        ),
         #[cfg(feature = "templating")]
         tera: Default::default(),
     };
@@ -93,15 +75,7 @@ async fn main() -> ExitCode {
     let app = Router::new()
         .nest("/", routes::router())
         .layer(TraceLayer::new_for_http())
-        .route_layer(middleware::from_fn_with_state(
-            app_state.clone(),
-            handle_refresh_token,
-        ))
-        // NOTE: Layers are ran in reverse order of insertion.
-        .route_layer(middleware::from_fn_with_state(
-            app_state.clone(),
-            migrate_token,
-        ))
+        .route_layer(middleware::from_fn(handle_refresh_token))
         .with_state(app_state);
     // .register("/", catchers![unauthorized, forbidden, not_found])
 

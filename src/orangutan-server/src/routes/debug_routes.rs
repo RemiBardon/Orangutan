@@ -1,7 +1,7 @@
 use std::sync::{Arc, RwLock};
 
 use axum::{routing::get, Router};
-use axum_extra::extract::PrivateCookieJar;
+use axum_extra::extract::CookieJar;
 use chrono::{DateTime, Utc};
 use lazy_static::lazy_static;
 
@@ -48,10 +48,10 @@ pub(super) fn templates() -> Vec<(&'static str, &'static str)> {
 }
 
 // #[axum::debug_handler]
-async fn clear_cookies(cookie_jar: PrivateCookieJar) -> (PrivateCookieJar, String) {
+async fn clear_cookies(cookie_jar: CookieJar) -> (CookieJar, String) {
     let mut empty_jar = cookie_jar.clone();
     for cookie in cookie_jar.iter() {
-        empty_jar = empty_jar.remove(cookie);
+        empty_jar = empty_jar.remove(cookie.clone());
     }
 
     (empty_jar, "Success".to_string())

@@ -7,15 +7,12 @@ use std::{
 };
 
 use axum::{
-    extract::{rejection::QueryRejection, FromRef, FromRequestParts, Query, Request, State},
+    extract::{rejection::QueryRejection, FromRequestParts, Query, Request},
     http::{request, HeaderMap, HeaderValue, Uri},
     middleware::Next,
     response::{IntoResponse, Redirect, Response},
 };
-use axum_extra::{
-    either::Either,
-    extract::{cookie::Key, CookieJar, PrivateCookieJar},
-};
+use axum_extra::{either::Either, extract::CookieJar};
 use biscuit_auth::{macros::authorizer, Biscuit};
 use lazy_static::lazy_static;
 use serde::Deserialize;
@@ -24,7 +21,6 @@ use tracing::{debug, trace};
 use crate::{
     config::*,
     util::{add_cookie, add_padding, profiles},
-    AppState,
 };
 
 lazy_static! {
@@ -71,7 +67,6 @@ impl IntoResponse for TokenError {
 impl<S> FromRequestParts<S> for Token
 where
     S: Send + Sync,
-    Key: FromRef<S>,
 {
     type Rejection = TokenError;
 
@@ -116,9 +111,7 @@ where
         }
 
         // Check cookies
-        // NOTE: For some reason, `rustc` can't figure out the type here… so we need to explicit it.
-        //   It worked before, so it will probably wagically work again later. It just doesn't work now.
-        let cookies = PrivateCookieJar::<Key>::from_request_parts(parts, state)
+        let cookies = CookieJar::from_request_parts(parts, state)
             .await
             .map_err(|err| match err {})
             .unwrap();
@@ -170,29 +163,6 @@ where
     }
 }
 
-pub async fn migrate_token(
-    mut cookies: CookieJar,
-    mut private_cookies: PrivateCookieJar,
-    req: Request,
-    next: Next,
-) -> Either<Response, (CookieJar, PrivateCookieJar, Redirect)> {
-    // trace!("Running token migration middleware…");
-    let Some(cookie) = cookies.get(TOKEN_COOKIE_NAME).cloned() else {
-        trace!("Token migration middleware found no outdated token, forwarding…");
-        return Either::E1(next.run(req).await);
-    };
-    trace!("Migrating outdated token…");
-
-    cookies = cookies.remove(cookie.clone());
-    private_cookies = private_cookies.add(cookie.clone());
-
-    Either::E2((
-        cookies,
-        private_cookies,
-        Redirect::to(&req.uri().to_string()),
-    ))
-}
-
 #[derive(Deserialize)]
 pub struct RefreshTokenQuery {
     #[serde(default)]
@@ -202,8 +172,7 @@ pub struct RefreshTokenQuery {
 }
 
 pub async fn handle_refresh_token(
-    State(_app_state): State<AppState>,
-    cookies: PrivateCookieJar,
+    cookies: CookieJar,
     Query(RefreshTokenQuery {
         refresh_token,
         force,
@@ -212,7 +181,7 @@ pub async fn handle_refresh_token(
     token: Option<Token>,
     req: Request,
     next: Next,
-) -> Result<Either<Response, (PrivateCookieJar, Redirect)>, crate::Error> {
+) -> Result<Either<Response, (CookieJar, Redirect)>, crate::Error> {
     trace!("Running refresh token middleware…");
     let Some(refresh_token) = refresh_token else {
         trace!("Refresh token middleware found no refresh token, forwarding…");
@@ -280,8 +249,8 @@ pub async fn handle_refresh_token(
     fn redirect_to_same_page_without_query_param(
         uri: &Uri,
         query: &mut HashMap<String, String>,
-        cookies: PrivateCookieJar,
-    ) -> Result<(PrivateCookieJar, Redirect), crate::Error> {
+        cookies: CookieJar,
+    ) -> Result<(CookieJar, Redirect), crate::Error> {
         query.remove(REFRESH_TOKEN_QUERY_PARAM_NAME);
         // TODO: Check if we need to URL-encode keys and values or if they are still encoded.
         let query_segs: Vec<String> = query.iter().map(|(k, v)| format!("{k}={v}")).collect();
