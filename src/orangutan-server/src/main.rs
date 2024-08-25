@@ -17,17 +17,15 @@ use orangutan_helpers::{
     website_id::WebsiteId,
 };
 use request_guards::{handle_refresh_token, REVOKED_TOKENS};
-use tera::Tera;
 use tokio::runtime::Handle;
 use tower::Service;
 use tower_http::{
     services::{fs::ServeFileSystemResponseBody, ServeFile},
     trace::TraceLayer,
 };
-#[cfg(feature = "templating")]
-use tracing::debug;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use tracing_subscriber::EnvFilter;
+#[cfg(feature = "token-generator")]
 use util::WebsiteRoot;
 
 #[cfg(feature = "templating")]
@@ -36,13 +34,15 @@ use crate::{config::NOT_FOUND_FILE, routes::update_content_routes, util::error};
 
 #[derive(Clone)]
 struct AppState {
+    #[cfg(feature = "token-generator")]
     website_root: WebsiteRoot,
     #[cfg(feature = "templating")]
-    tera: Tera,
+    tera: tera::Tera,
 }
 
 #[tokio::main]
 async fn main() -> ExitCode {
+    #[cfg(feature = "token-generator")]
     let website_root = match WebsiteRoot::try_from_env() {
         Ok(r) => r,
         Err(err) => {
@@ -51,7 +51,8 @@ async fn main() -> ExitCode {
         },
     };
 
-    let mut app_state = AppState {
+    let app_state = AppState {
+        #[cfg(feature = "token-generator")]
         website_root,
         #[cfg(feature = "templating")]
         tera: Default::default(),
@@ -63,6 +64,8 @@ async fn main() -> ExitCode {
         .init();
 
     // Add support for templating if needed
+    #[cfg(feature = "templating")]
+    let mut app_state = app_state;
     #[cfg(feature = "templating")]
     {
         info!("Initializing templating engine…");
@@ -163,7 +166,6 @@ enum Error {
     #[cfg(feature = "templating")]
     #[error("Templating error: {0}")]
     TemplatingError(#[from] templating::Error),
-    #[cfg(feature = "templating")]
     #[error("Internal server error: {0}")]
     InternalServerError(String),
     #[error("Client error: {0}")]

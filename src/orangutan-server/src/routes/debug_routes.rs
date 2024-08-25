@@ -23,12 +23,15 @@ lazy_static! {
 }
 
 pub(super) fn router() -> Router<AppState> {
-    let mut router = Router::<AppState>::new()
+    let router = Router::<AppState>::new()
         .route("/clear-cookies", get(clear_cookies).put(clear_cookies))
         .route("/_info", get(get_user_info))
         .route("/_errors", get(errors))
         .route("/_access-logs", get(access_logs))
         .route("/_revoked-tokens", get(revoked_tokens));
+
+    #[cfg(feature = "token-generator")]
+    let mut router = router;
     #[cfg(feature = "token-generator")]
     {
         router = router.route(
@@ -36,6 +39,7 @@ pub(super) fn router() -> Router<AppState> {
             get(token_generator::token_generation_form).post(token_generator::generate_token),
         );
     }
+
     router
 }
 
