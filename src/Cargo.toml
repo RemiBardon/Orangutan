@@ -9,17 +9,25 @@ members = [
 resolver = "2"
 
 [workspace.dependencies]
+axum = { version = "0.7", features = ["macros"] }
+axum-extra = { version = "0.9", features = ["cookie"] }
 base64 = "0.22"
 biscuit-auth = "5"
 chrono = "0.4"
 hex = "0.4"
 iso8601-duration = "0.2"
 lazy_static = "1"
-rocket = "0.5"
+mime = "0.3"
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+serde_urlencoded = "0.7"
+serde_with = "3"
 tera = "1"
 thiserror = "1"
 time = "0.3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tower = "0.5"
+tower-http = { version = "0.5", features = ["fs", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 urlencoding = "2"

@@ -1,16 +1,16 @@
+use axum::{extract::Path, routing::post, Router};
 use orangutan_helpers::generate::{self, *};
-use rocket::{post, response::status::BadRequest, routes, Route};
 
-use super::auth_routes::REVOKED_TOKENS;
-use crate::error;
+use crate::{error, request_guards::REVOKED_TOKENS, AppState};
 
-pub(super) fn routes() -> Vec<Route> {
-    routes![update_content_github, update_content_other]
+pub(super) fn router() -> Router<AppState> {
+    Router::<AppState>::new()
+        .route("/update-content/github", post(update_content_github))
+        .route("/update-content/:source", post(update_content_other))
 }
 
 /// TODO: [Validate webhook deliveries](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries#validating-webhook-deliveries)
-#[post("/update-content/github")]
-fn update_content_github() -> Result<(), crate::Error> {
+async fn update_content_github() -> Result<(), crate::Error> {
     // Update repository
     pull_repository().map_err(Error::CannotPullOutdatedRepository)?;
 
@@ -34,9 +34,8 @@ fn update_content_github() -> Result<(), crate::Error> {
     Ok(())
 }
 
-#[post("/update-content/<source>")]
-fn update_content_other(source: &str) -> BadRequest<String> {
-    BadRequest(format!("Source '{source}' is not supported."))
+async fn update_content_other(Path(source): Path<String>) -> crate::Error {
+    crate::Error::ClientError(format!("Source '{source}' is not supported."))
 }
 
 #[derive(Debug, thiserror::Error)]

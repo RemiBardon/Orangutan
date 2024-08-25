@@ -1,6 +1,3 @@
-use rocket::serde::Serialize;
-use tera::Context;
-
 use super::error;
 
 #[derive(Debug, thiserror::Error)]
@@ -11,12 +8,12 @@ pub enum Error {
     RenderError(tera::Error),
 }
 
-pub fn render<C: Serialize>(
+pub fn render<C: serde::Serialize>(
     tera: &tera::Tera,
     template: &str,
     context: C,
 ) -> Result<String, Error> {
-    let tera_ctx = Context::from_serialize(context).map_err(Error::ContextError)?;
+    let tera_ctx = tera::Context::from_serialize(context).map_err(Error::ContextError)?;
     tera.render(template, &tera_ctx).map_err(Error::RenderError)
 }
 
@@ -90,7 +87,7 @@ pub fn render<C: Serialize>(
 #[macro_export]
 macro_rules! context {
     ($($key:ident $(: $value:expr)?),*$(,)?) => {{
-        use rocket::serde::ser::{Serialize, Serializer, SerializeMap};
+        use serde::ser::{Serialize, Serializer, SerializeMap};
         use ::std::fmt::{Debug, Formatter};
         use ::std::result::Result;
 

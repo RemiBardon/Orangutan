@@ -3,12 +3,15 @@ pub mod templating;
 #[cfg(feature = "token-generator")]
 mod website_root;
 
+use axum_extra::extract::{
+    cookie::{Cookie, SameSite},
+    CookieJar,
+};
 use biscuit_auth::{
     builder::{Fact, Term},
     Biscuit,
 };
 use chrono::Utc;
-use rocket::http::{Cookie, CookieJar, SameSite};
 use time::Duration;
 use tracing::error;
 
@@ -56,23 +59,59 @@ pub fn add_padding(base64_string: &str) -> String {
     }
 }
 
+/// Returns a new [CookieJar] which _must_ be returned from the handler
+/// as part of the response for the changes to be propagated.
+/// See [CookieJar]'s documentation for examples.
 pub fn add_cookie(
     biscuit: &Biscuit,
-    cookies: &CookieJar<'_>,
-) {
-    match biscuit.to_base64() {
-        Ok(base64) => {
-            cookies.add(
-                Cookie::build((TOKEN_COOKIE_NAME, base64))
-                    .path("/")
-                    .max_age(Duration::days(365 * 5))
-                    .http_only(true)
-                    .secure(true)
-                    .same_site(SameSite::Strict),
-            );
-        },
-        Err(err) => {
-            error(format!("Error setting token cookie: {err}"));
-        },
+    cookies: CookieJar,
+) -> Result<CookieJar, crate::Error> {
+    let base64 = biscuit.to_base64().map_err(|err| {
+        crate::Error::InternalServerError(format!("Error setting token cookie: {err}"))
+    })?;
+    let cookie = Cookie::build((TOKEN_COOKIE_NAME, base64))
+        .path("/")
+        .max_age(Duration::days(365 * 5))
+        .http_only(true)
+        .secure(true)
+        .same_site(SameSite::Strict)
+        .build();
+    Ok(cookies.clone().add(cookie))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::add_padding;
+
+    #[test]
+    fn test_base64_padding() {
+        assert_eq!(add_padding("a"), "a===".to_string());
+        assert_eq!(add_padding("ab"), "ab==".to_string());
+        assert_eq!(add_padding("abc"), "abc=".to_string());
+        assert_eq!(add_padding("abcd"), "abcd".to_string());
+
+        assert_eq!(add_padding("a==="), "a===".to_string());
+        assert_eq!(add_padding("ab=="), "ab==".to_string());
+        assert_eq!(add_padding("abc="), "abc=".to_string());
+        assert_eq!(add_padding("abcd"), "abcd".to_string());
     }
+
+    // #[test]
+    // fn test_should_force_token_refresh() {
+    //     assert_eq!(should_force_token_refresh(None), false);
+    //     assert_eq!(should_force_token_refresh(Some(Ok(true))), true);
+    //     assert_eq!(should_force_token_refresh(Some(Ok(false))), false);
+    //     assert_eq!(
+    //         should_force_token_refresh(Some(Err(Errors::new().with_name("yes")))),
+    //         true
+    //     );
+    //     assert_eq!(
+    //         should_force_token_refresh(Some(Err(Errors::new().with_name("no")))),
+    //         true
+    //     );
+    //     assert_eq!(
+    //         should_force_token_refresh(Some(Err(Errors::new().with_name("")))),
+    //         true
+    //     );
+    // }
 }

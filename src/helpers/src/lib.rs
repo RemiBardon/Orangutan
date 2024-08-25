@@ -7,48 +7,61 @@ use std::{
     collections::HashSet,
     fs::{self, File},
     io,
-    path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    ops::Deref,
+    path::PathBuf,
+    sync::{Arc, RwLock},
 };
 
 use lazy_static::lazy_static;
-use serde_json::Value;
+use serde::{de::DeserializeOwned, Deserialize};
+use serde_with::{serde_as, DefaultOnNull};
 use tracing::{debug, error, trace};
 
 use crate::config::*;
 
 lazy_static! {
-    static ref USED_PROFILES: Arc<Mutex<Option<&'static HashSet<String>>>> =
-        Arc::new(Mutex::new(None));
+    static ref USED_PROFILES: Arc<RwLock<Option<&'static HashSet<String>>>> = Arc::default();
 }
 
 pub fn used_profiles<'a>() -> &'a HashSet<String> {
-    let mut used_profiles = USED_PROFILES.lock().unwrap();
-    if let Some(profiles) = used_profiles.clone() {
+    if let Some(profiles) = *USED_PROFILES.read().unwrap() {
         trace!("Read used profiles from cache");
         return profiles;
     }
 
-    trace!("Reading used profiles…");
+    debug!("Reading all used profiles…");
     let acc: &'static mut HashSet<String> = Box::leak(Box::new(HashSet::new()));
 
     for data_file in find_data_files() {
         // trace!("Reading <{}>…", data_file.display());
 
-        // Make sure this generator isn't broken (could be replaced by unit tests)
-        // let html_file = html_file(&data_file).unwrap();
-        // trace!("{}", html_file.display());
-
-        let read_allowed = read_allowed(&data_file).unwrap();
+        let metadata: PageMetadata = match deser(&data_file) {
+            Ok(Some(metadata)) => metadata,
+            Ok(None) => {
+                error!(
+                    "Could not read page metadata at <{}>: File not found",
+                    data_file.display(),
+                );
+                continue;
+            },
+            Err(err) => {
+                error!(
+                    "Could not read page metadata at <{}>: {err}",
+                    data_file.display(),
+                );
+                continue;
+            },
+        };
+        let read_allowed = metadata.read_allowed;
         // trace!("  read_allowed: {:?}", read_allowed);
 
         // Store new profiles
-        read_allowed.iter().for_each(|p| {
-            acc.insert(p.clone());
+        read_allowed.into_iter().for_each(|p| {
+            acc.insert(p.to_owned());
         });
     }
 
-    *used_profiles = Some(acc);
+    *USED_PROFILES.write().unwrap() = Some(acc);
 
     acc
 }
@@ -76,43 +89,13 @@ pub fn find(
     }
 }
 
-fn _html_file(data_file: &PathBuf) -> Option<Option<PathBuf>> {
-    let file = File::open(data_file).ok()?;
-    let reader = io::BufReader::new(file);
-    let data: Value = match serde_json::from_reader(reader) {
-        Ok(data) => data,
-        Err(_) => return None,
-    };
-
-    let path = data.get(PATH_FIELD)?;
-
-    Some(serde_json::from_value(path.to_owned()).ok())
-}
-
-fn html_file(data_file: &PathBuf) -> Result<PathBuf, ()> {
-    match _html_file(data_file) {
-        Some(Some(path)) => Ok(path),
-        Some(None) => {
-            error!("Path not defined");
-            Err(())
-        },
-        None => {
-            error!("File not found");
-            Err(())
-        },
-    }
-}
-
-pub fn data_file(html_file: &PathBuf) -> PathBuf {
-    let mut data_file_rel = html_file
-        .strip_prefix(WEBSITE_DATA_DIR.to_path_buf())
-        .unwrap_or(html_file)
-        .with_extension(DATA_FILE_EXTENSION);
-    data_file_rel = match data_file_rel.strip_prefix("/") {
+pub fn data_file_path(page_relpath: &PathBuf) -> PathBuf {
+    let mut data_file_relpath = page_relpath.with_extension(DATA_FILE_EXTENSION);
+    data_file_relpath = match data_file_relpath.strip_prefix("/") {
         Ok(trimmed) => trimmed.to_path_buf(),
-        Err(_) => data_file_rel,
+        Err(_) => data_file_relpath,
     };
-    WEBSITE_DATA_DIR.join(data_file_rel)
+    WEBSITE_DATA_DIR.join(data_file_relpath)
 }
 
 fn find_data_files() -> Vec<PathBuf> {
@@ -125,35 +108,81 @@ fn find_data_files() -> Vec<PathBuf> {
     data_files
 }
 
-fn _read_allowed(data_file: &PathBuf) -> Option<Option<Vec<String>>> {
-    let file = File::open(data_file).ok()?;
-    let reader = io::BufReader::new(file);
-    let data: Value = match serde_json::from_reader(reader) {
-        Ok(data) => data,
-        Err(_) => return None,
+#[serde_as]
+#[derive(Deserialize)]
+pub struct PageMetadata {
+    // NOTE: Hugo taxonomy term pages contain `read_allowed": null`.
+    // TODO: Investigate and fix this, to remove the `serde` default which could be in conflict with the user's preference.
+    #[serde(default)]
+    #[serde_as(deserialize_as = "DefaultOnNull")]
+    pub read_allowed: ReadAllowed,
+    pub path: PathBuf,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ReadAllowed(Vec<String>);
+
+impl Deref for ReadAllowed {
+    type Target = Vec<String>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Default for ReadAllowed {
+    fn default() -> Self {
+        Self(vec![DEFAULT_PROFILE.to_owned()])
+    }
+}
+
+impl IntoIterator for ReadAllowed {
+    type Item = <<Self as Deref>::Target as IntoIterator>::Item;
+    type IntoIter = <<Self as Deref>::Target as IntoIterator>::IntoIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+fn deser<T: DeserializeOwned>(file_path: &PathBuf) -> Result<Option<T>, serde_json::Error> {
+    let Ok(file) = File::open(file_path) else {
+        return Ok(None);
     };
-
-    let read_allowed = data.get(READ_ALLOWED_FIELD)?;
-
-    Some(serde_json::from_value(read_allowed.to_owned()).ok())
+    let res: T = serde_json::from_reader(file)?;
+    Ok(Some(res))
 }
 
-// `None` if file not found
-pub fn read_allowed(data_file: &PathBuf) -> Option<Vec<String>> {
-    _read_allowed(data_file).map(|o| o.unwrap_or(vec![DEFAULT_PROFILE.to_string()]))
-}
-
-pub fn object_key<P: AsRef<Path>>(
-    path: &P,
-    profile: &str,
-) -> String {
-    let path = path.as_ref();
-    if let Some(ext) = path.extension() {
-        if SUFFIXED_EXTENSIONS.contains(&ext.to_str().unwrap()) {
-            return format!("{}@{}", path.display(), profile);
+fn deser_first_match<T: DeserializeOwned>(
+    file_paths: Vec<PathBuf>
+) -> Result<Option<T>, serde_json::Error> {
+    for file_path in file_paths.iter() {
+        trace!("Trying {}…", file_path.display());
+        match deser(file_path)? {
+            Some(res) => {
+                // TODO: Check if this index is always the same.
+                // debug!("Found page metadata in match #{i}");
+                return Ok(Some(res));
+            },
+            None => continue,
         }
     }
-    path.display().to_string()
+    Ok(None)
+}
+
+// `Ok(None)` if file not found.
+// `Err(_)` if file found but deserialization error.
+// `Ok(Some(_))` if file found.
+pub fn page_metadata(page_relpath: &PathBuf) -> Result<Option<PageMetadata>, serde_json::Error> {
+    let mut file_paths = vec![
+        data_file_path(page_relpath),
+        data_file_path(&page_relpath.join("index.html")),
+    ];
+    // Don't try parsing the exact path if it points to a directory.
+    if page_relpath.is_dir() {
+        file_paths.remove(0);
+    }
+    deser_first_match(file_paths)
 }
 
 pub fn copy_directory(
