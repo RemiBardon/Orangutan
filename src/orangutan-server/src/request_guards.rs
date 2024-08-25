@@ -14,7 +14,7 @@ use axum::{
 };
 use axum_extra::{
     either::Either,
-    extract::{cookie::Key, PrivateCookieJar},
+    extract::{cookie::Key, CookieJar, PrivateCookieJar},
 };
 use biscuit_auth::{macros::authorizer, Biscuit};
 use lazy_static::lazy_static;
@@ -168,6 +168,29 @@ where
         let biscuit = biscuit.ok_or(TokenError::Unauthorized)?;
         Ok(Token { biscuit })
     }
+}
+
+pub async fn migrate_token(
+    mut cookies: CookieJar,
+    mut private_cookies: PrivateCookieJar,
+    req: Request,
+    next: Next,
+) -> Either<Response, (CookieJar, PrivateCookieJar, Redirect)> {
+    // trace!("Running token migration middleware…");
+    let Some(cookie) = cookies.get(TOKEN_COOKIE_NAME).cloned() else {
+        trace!("Token migration middleware found no outdated token, forwarding…");
+        return Either::E1(next.run(req).await);
+    };
+    trace!("Migrating outdated token…");
+
+    cookies = cookies.remove(cookie.clone());
+    private_cookies = private_cookies.add(cookie.clone());
+
+    Either::E2((
+        cookies,
+        private_cookies,
+        Redirect::to(&req.uri().to_string()),
+    ))
 }
 
 #[derive(Deserialize)]

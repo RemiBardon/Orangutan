@@ -19,7 +19,7 @@ use orangutan_helpers::{
     generate::{self, *},
     website_id::WebsiteId,
 };
-use request_guards::{handle_refresh_token, REVOKED_TOKENS};
+use request_guards::{handle_refresh_token, migrate_token, REVOKED_TOKENS};
 use tera::Tera;
 use tokio::runtime::Handle;
 use tower::Service;
@@ -96,6 +96,11 @@ async fn main() -> ExitCode {
         .route_layer(middleware::from_fn_with_state(
             app_state.clone(),
             handle_refresh_token,
+        ))
+        // NOTE: Layers are ran in reverse order of insertion.
+        .route_layer(middleware::from_fn_with_state(
+            app_state.clone(),
+            migrate_token,
         ))
         .with_state(app_state);
     // .register("/", catchers![unauthorized, forbidden, not_found])
