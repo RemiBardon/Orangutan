@@ -121,8 +121,8 @@ fn not_found() -> Result<Response<ServeFileSystemResponseBody>, Response> {
     })?;
 
     let file_path = website_dir.join(NOT_FOUND_FILE);
-    match fs::exists(&file_path) {
-        Ok(true) => {
+    match fs::metadata(&file_path) {
+        Ok(_) => {
             let res = tokio::task::block_in_place(move || {
                 Handle::current().block_on(async move {
                     ServeFile::new(file_path.clone())
@@ -133,13 +133,6 @@ fn not_found() -> Result<Response<ServeFileSystemResponseBody>, Response> {
                 })
             });
             Ok(res)
-        },
-        Ok(false) => {
-            error(format!(
-                "Could not read \"not found\" file at <{}>: File doesn't exist.",
-                file_path.display(),
-            ));
-            Err(fallback())
         },
         Err(err) => {
             error(format!(
