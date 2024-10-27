@@ -20,22 +20,19 @@ jobs:
     steps:
       - name: Get current tag
         id: tag
-        uses: devops-actions/action-get-tag@v1.0.1
+        uses: devops-actions/action-get-tag@v1.0.3
         with:
           strip_v: true
 
       - name: Install Rust toolchain
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Verify versions
         run: rustc --version && rustup --version && cargo --version
 
-      - name: Cache build context
+      - name: Cache build artifacts
         id: cache-cargo
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
