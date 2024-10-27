@@ -6,6 +6,7 @@ on:
       - "v*.*.*"
 
 env:
+  CARGO_ROOT: src
   SRC: src/orangutan-server
   BIN: orangutan-server
 
@@ -70,7 +71,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.BIN }}-${{ env.tag }}-${{ matrix.target }}
-          path: ${{ env.SRC }}/target/${{ matrix.target }}/release/${{ env.BIN }}
+          path: ${{ env.CARGO_ROOT }}/target/${{ matrix.target }}/release/${{ env.BIN }}
           if-no-files-found: error
 
   release:
