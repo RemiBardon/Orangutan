@@ -34,7 +34,7 @@ async fn handle_request(
     State(_app_state): State<AppState>,
     uri: Uri,
     token: Option<Token>,
-    headers: HeaderMap,
+    ref headers: HeaderMap,
 ) -> Result<Either<Response<ServeFileSystemResponseBody>, Error>, Error> {
     let path = uri.path();
     trace!("GET {}", &path);
@@ -45,24 +45,41 @@ async fn handle_request(
     let website_dir = website_dir(&website_id);
 
     // Log access only if the page is HTML.
-    // WARN: This solution is far from perfect as someone requesting a page without setting the `Accept` header
-    //   would not be logged even though they'd get the file back.
-    let accept = headers
-        .get(ACCEPT)
-        .map(|value| {
-            value
-                .to_str()
-                .inspect_err(|err| debug!("{value:?} could not be mapped to a string: {err}"))
-                .ok()
-        })
-        .flatten()
-        .map(|value| {
-            Mime::from_str(value)
-                .inspect_err(|err| debug!("{value:?} could not be mapped to a MIME type: {err}"))
-                .ok()
-        })
-        .flatten();
-    if accept.is_some_and(|m| m.type_() == mime::HTML) {
+    // WARN: This solution is far from perfect as someone requesting a page
+    //   without setting the `Accept` header would not be logged even though
+    //   they’d get the file back.
+    fn accepts(
+        headers: &HeaderMap,
+        mime: Mime,
+    ) -> bool {
+        // NOTE: Real-life example `Accept`: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
+        let Some(accept) = headers.get(ACCEPT) else {
+            return false;
+        };
+
+        // Transform the header value into a string with only visible ASCII
+        // characters.
+        let accept = match accept.to_str() {
+            Ok(str) => str,
+            Err(err) => {
+                debug!("'{accept:?}' could not be mapped to a string: {err}");
+                return false;
+            },
+        };
+
+        let mut mimes = accept
+            // Split the header value into individual MIME types.
+            .split(",")
+            .filter_map(|mime| -> Option<Mime> {
+                mime.parse::<Mime>()
+                    .inspect_err(|err| debug!("'{mime}' could not be mapped to a MIME type: {err}"))
+                    .ok()
+            });
+
+        let expected_mime = mime.essence_str();
+        mimes.any(|mime| mime.essence_str() == expected_mime)
+    }
+    if accepts(headers, mime::TEXT_HTML) {
         log_access(user_profiles.to_owned(), path.to_owned());
     }
 
