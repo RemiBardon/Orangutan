@@ -42,6 +42,10 @@ struct AppState {
 
 #[tokio::main]
 async fn main() -> ExitCode {
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .init();
+
     #[cfg(feature = "token-generator")]
     let website_root = match WebsiteRoot::try_from_env() {
         Ok(r) => r,
@@ -57,11 +61,6 @@ async fn main() -> ExitCode {
         #[cfg(feature = "templating")]
         tera: Default::default(),
     };
-
-    info!("Setting up tracing…");
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
-        .init();
 
     // Add support for templating if needed
     #[cfg(feature = "templating")]
