@@ -4,8 +4,13 @@ use std::{env, process};
 
 use orangutan_refresh_token::{Error, RefreshToken};
 use tracing::error;
+use tracing_subscriber::EnvFilter;
 
 fn main() {
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .init();
+
     if let Err(err) = main_() {
         error!("{err}");
         process::exit(1)

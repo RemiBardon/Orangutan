@@ -12,3 +12,4 @@ lazy_static = { workspace = true }
 orangutan-helpers = { path = "../helpers" }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
