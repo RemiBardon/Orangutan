@@ -26,7 +26,7 @@ use crate::{config::*, request_guards::Token, routes::debug_routes::log_access, 
 pub(super) fn router() -> Router<AppState> {
     Router::<AppState>::new()
         .route("/", get(handle_request))
-        .route("/*path", get(handle_request))
+        .route("/{*path}", get(handle_request))
 }
 
 // #[axum::debug_handler]
