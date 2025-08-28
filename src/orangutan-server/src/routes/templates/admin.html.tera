@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+
+{% block main %}
+<ul>
+  {% for url in pages %}
+  <li><a href="{{url}}">{{url}}</a></li>
+  {% endfor %}
+</ul>
+{% endblock main %}

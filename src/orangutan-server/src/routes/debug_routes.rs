@@ -23,15 +23,19 @@ lazy_static! {
 }
 
 pub(super) fn router() -> Router<AppState> {
-    let router = Router::<AppState>::new()
+    #[allow(unused_mut)]
+    let mut router = Router::<AppState>::new()
         .route("/clear-cookies", get(clear_cookies).put(clear_cookies))
         .route("/_info", get(get_user_info))
         .route("/_errors", get(errors))
         .route("/_access-logs", get(access_logs))
         .route("/_revoked-tokens", get(revoked_tokens));
 
-    #[cfg(feature = "token-generator")]
-    let mut router = router;
+    #[cfg(feature = "templating")]
+    {
+        router = router.route("/_admin", get(index::admin_page));
+    }
+
     #[cfg(feature = "token-generator")]
     {
         router = router.route(
@@ -45,10 +49,56 @@ pub(super) fn router() -> Router<AppState> {
 
 #[cfg(feature = "templating")]
 pub(super) fn templates() -> Vec<(&'static str, &'static str)> {
-    vec![(
-        "generate-token.html",
-        include_str!("templates/generate-token.html.tera"),
-    )]
+    vec![
+        (
+            "generate-token.html",
+            include_str!("templates/generate-token.html.tera"),
+        ),
+        ("admin.html", include_str!("templates/admin.html.tera")),
+    ]
+}
+
+#[cfg(feature = "templating")]
+mod index {
+    use axum::{extract::State, response::Html};
+
+    use crate::{request_guards::Token, AppState, Error};
+
+    fn admin_page_(tera: &tera::Tera) -> Result<Html<String>, Error> {
+        use crate::{context, util::templating::render};
+
+        let pages = vec![
+            "/_info",
+            "/_errors",
+            "/_access-logs",
+            "/_revoked-tokens",
+        ];
+        #[cfg(feature = "token-generator")]
+        let pages = {
+            let mut pages = pages;
+            pages.push("_generate-token");
+            pages
+        };
+
+        let html = render(
+            tera,
+            "admin.html",
+            context! { page_title: "Admin pages", pages },
+        )?;
+
+        Ok(Html(html))
+    }
+
+    pub async fn admin_page(
+        token: Token,
+        State(app_state): State<AppState>,
+    ) -> Result<Html<String>, Error> {
+        if !token.profiles().contains(&"*".to_owned()) {
+            Err(Error::Unauthorized)?
+        }
+
+        admin_page_(&app_state.tera)
+    }
 }
 
 // #[axum::debug_handler]
