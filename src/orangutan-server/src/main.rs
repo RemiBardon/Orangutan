@@ -75,7 +75,7 @@ async fn main() -> ExitCode {
     }
 
     let app = Router::new()
-        .nest("/", routes::router())
+        .merge(routes::router())
         .layer(TraceLayer::new_for_http())
         .route_layer(middleware::from_fn(handle_refresh_token))
         .with_state(app_state);
