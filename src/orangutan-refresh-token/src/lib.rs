@@ -109,6 +109,6 @@ pub enum Error {
     #[error("Duration '{0}' malformatted ({1:?}). Check ISO 8601.")]
     MalformattedDuration(String, iso8601_duration::ParseDurationError),
     // FIXME: Support `year` and `month` durations
-    #[error("Could not convert `iso8601_duration::Duration` to `std::time::Duration`. '{0}' contains `year` or `month`, which isn't supported by `{}`.", stringify!(iso8601_duration::duration::Duration::to_std))]
+    #[error("Could not convert `iso8601_duration::Duration` to `std::time::Duration`. '{0}' contains `year` or `month`, which isn't supported by `iso8601_duration::duration::Duration::to_std`.")]
     UnsupportedDuration(String),
 }

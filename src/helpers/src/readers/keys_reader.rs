@@ -93,13 +93,13 @@ pub enum Error {
     Env(#[from] env::VarError),
     #[error("IO error: {0}")]
     IO(#[from] io::Error),
-    #[error("Could not create <{}> file: {1}", .0.display())]
+    #[error("Could not create <{path}> file: {1}", path = .0.display())]
     CannotCreateFile(PathBuf, io::Error),
-    #[error("Could not open <{}> file: {1}", .0.display())]
+    #[error("Could not open <{path}> file: {1}", path = .0.display())]
     CannotOpenFile(PathBuf, io::Error),
-    #[error("Could not write in <{}> file: {1}", .0.display())]
+    #[error("Could not write in <{path}> file: {1}", path = .0.display())]
     CannotWriteInFile(PathBuf, io::Error),
-    #[error("Could not read <{}> file: {1}", .0.display())]
+    #[error("Could not read <{path}> file: {1}", path = .0.display())]
     CannotReadFile(PathBuf, io::Error),
     #[error("{0}")]
     BiscuitFormat(#[from] biscuit::error::Format),
