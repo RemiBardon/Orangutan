@@ -6,7 +6,7 @@ use crate::{error, request_guards::REVOKED_TOKENS, AppState};
 pub(super) fn router() -> Router<AppState> {
     Router::<AppState>::new()
         .route("/update-content/github", post(update_content_github))
-        .route("/update-content/:source", post(update_content_other))
+        .route("/update-content/{source}", post(update_content_other))
 }
 
 /// TODO: [Validate webhook deliveries](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries#validating-webhook-deliveries)
