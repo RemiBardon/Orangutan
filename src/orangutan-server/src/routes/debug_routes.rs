@@ -160,8 +160,8 @@ async fn revoked_tokens(token: Token) -> Result<String, Error> {
 
 #[cfg(feature = "token-generator")]
 pub mod token_generator {
+    use axum::response::Html;
     use axum::{extract::State, Form};
-    use axum_extra::response::Html;
     use orangutan_refresh_token::RefreshToken;
     use serde::Deserialize;
 

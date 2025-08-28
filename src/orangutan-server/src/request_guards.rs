@@ -7,7 +7,9 @@ use std::{
 };
 
 use axum::{
-    extract::{rejection::QueryRejection, FromRequestParts, Query, Request},
+    extract::{
+        rejection::QueryRejection, FromRequestParts, OptionalFromRequestParts, Query, Request,
+    },
     http::{request, HeaderMap, HeaderValue, Uri},
     middleware::Next,
     response::{IntoResponse, Redirect, Response},
@@ -63,7 +65,6 @@ impl IntoResponse for TokenError {
     }
 }
 
-#[axum::async_trait]
 impl<S> FromRequestParts<S> for Token
 where
     S: Send + Sync,
@@ -160,6 +161,22 @@ where
 
         let biscuit = biscuit.ok_or(TokenError::Unauthorized)?;
         Ok(Token { biscuit })
+    }
+}
+impl<S> OptionalFromRequestParts<S> for Token
+where
+    S: Send + Sync,
+{
+    type Rejection = <Self as FromRequestParts<S>>::Rejection;
+
+    async fn from_request_parts(
+        parts: &mut request::Parts,
+        state: &S,
+    ) -> Result<Option<Self>, Self::Rejection> {
+        match <Self as FromRequestParts<S>>::from_request_parts(parts, state).await {
+            Ok(token) => Ok(Some(token)),
+            Err(_) => Ok(None),
+        }
     }
 }
 
