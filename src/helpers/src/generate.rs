@@ -399,7 +399,12 @@ pub fn trash_outdated_websites() -> Result<State, Error> {
     }
 
     // Remove outdated websites
-    fs::rename(DEST_DIR.as_path(), TRASH_DIR.as_path())?;
+    // NOTE: `DEST_DIR` might not exist if last website generation failed
+    //   and we didn’t recover properly. We should fix recovery, but this is
+    //   a workaround.
+    if DEST_DIR.exists() {
+        fs::rename(DEST_DIR.as_path(), TRASH_DIR.as_path())?;
+    }
 
     // Save caches (in case we need to recover)
     let state = State {
