@@ -56,16 +56,17 @@ fn _clone_repository() -> Result<(), Error> {
         .args(vec!["--depth", "1"]);
 
     trace!("Running `{:?}`…", command);
-    let status = command
-        .status()
+    let output = command
+        .output()
         .map_err(|e| Error::CannotExecuteCommand(format!("{:?}", command), e))?;
 
-    if status.success() {
+    if output.status.success() {
         Ok(())
     } else {
         Err(Error::CommandExecutionFailed {
             command: format!("{:?}", command),
-            code: status.code(),
+            code: output.status.code(),
+            stderr: output.stderr,
         })
     }
 }
@@ -77,16 +78,17 @@ fn _init_submodules() -> Result<(), Error> {
         .args(vec!["submodule", "update", "--init"]);
 
     trace!("Running `{:?}`…", command);
-    let status = command
-        .status()
+    let output = command
+        .output()
         .map_err(|e| Error::CannotExecuteCommand(format!("{:?}", command), e))?;
 
-    if status.success() {
+    if output.status.success() {
         Ok(())
     } else {
         Err(Error::CommandExecutionFailed {
             command: format!("{:?}", command),
-            code: status.code(),
+            code: output.status.code(),
+            stderr: output.stderr,
         })
     }
 }
@@ -104,16 +106,17 @@ fn _pull_repository() -> Result<(), Error> {
         .args(vec!["pull", "--rebase"]);
 
     trace!("Running `{:?}`…", command);
-    let status = command
-        .status()
+    let output = command
+        .output()
         .map_err(|e| Error::CannotExecuteCommand(format!("{:?}", command), e))?;
 
-    if status.success() {
+    if output.status.success() {
         Ok(())
     } else {
         Err(Error::CommandExecutionFailed {
             command: format!("{:?}", command),
-            code: status.code(),
+            code: output.status.code(),
+            stderr: output.stderr,
         })
     }
 }
@@ -125,18 +128,19 @@ fn _update_submodules() -> Result<(), Error> {
         .args(vec!["submodule", "update", "--remote", "--recursive"]);
 
     trace!("Running `{:?}`…", command);
-    let status = command
+    let output = command
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
-        .status()
+        .output()
         .map_err(|e| Error::CannotExecuteCommand(format!("{:?}", command), e))?;
 
-    if status.success() {
+    if output.status.success() {
         Ok(())
     } else {
         Err(Error::CommandExecutionFailed {
             command: format!("{:?}", command),
-            code: status.code(),
+            code: output.status.code(),
+            stderr: output.stderr,
         })
     }
 }
@@ -361,6 +365,7 @@ fn hugo(
         Err(Error::CommandExecutionFailed {
             command: format!("{:?}", command),
             code: output.status.code(),
+            stderr: output.stderr,
         })
     }
 }
@@ -451,8 +456,12 @@ pub fn empty_trash(_state: State) -> Result<(), Error> {
 pub enum Error {
     #[error("Could not execute command `{0}`: {1}")]
     CannotExecuteCommand(String, io::Error),
-    #[error("Command `{command}` failed with exit code {code:?}")]
-    CommandExecutionFailed { command: String, code: Option<i32> },
+    #[error("Command `{command}` failed with exit code {code:?}. stderr: {stderr}", stderr = String::from_utf8_lossy(.stderr))]
+    CommandExecutionFailed {
+        command: String,
+        code: Option<i32>,
+        stderr: Vec<u8>,
+    },
     #[error("Could not generate website: {0}")]
     CannotGenerateWebsite(Box<Error>),
     #[error("Could not empty <index.json> file: {0}")]
