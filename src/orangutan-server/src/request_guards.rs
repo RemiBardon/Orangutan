@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    hash::Hash,
     ops::Deref,
     str::FromStr,
     sync::RwLock,
@@ -29,6 +30,7 @@ lazy_static! {
     pub static ref REVOKED_TOKENS: RwLock<HashSet<Vec<u8>>> = RwLock::default();
 }
 
+#[derive(Debug, Clone)]
 pub struct Token {
     pub biscuit: Biscuit,
 }
@@ -44,6 +46,16 @@ impl Deref for Token {
 
     fn deref(&self) -> &Self::Target {
         &self.biscuit
+    }
+}
+
+impl Hash for Token {
+    fn hash<H: std::hash::Hasher>(
+        &self,
+        state: &mut H,
+    ) {
+        let signature = self.biscuit.container().authority.signature;
+        signature.to_bytes().hash(state)
     }
 }
 

@@ -79,6 +79,42 @@ pub fn add_cookie(
     Ok(cookies.clone().add(cookie))
 }
 
+pub fn accepts(
+    headers: &axum::http::HeaderMap,
+    mime: mime::Mime,
+) -> bool {
+    use axum::http::header::ACCEPT;
+    use mime::Mime;
+    use tracing::debug;
+
+    // NOTE: Real-life example `Accept`: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
+    let Some(accept) = headers.get(ACCEPT) else {
+        return false;
+    };
+
+    // Transform the header value into a string with only visible ASCII
+    // characters.
+    let accept = match accept.to_str() {
+        Ok(str) => str,
+        Err(err) => {
+            debug!("'{accept:?}' could not be mapped to a string: {err}");
+            return false;
+        },
+    };
+
+    let mut mimes = accept
+        // Split the header value into individual MIME types.
+        .split(",")
+        .filter_map(|mime| -> Option<Mime> {
+            mime.parse::<Mime>()
+                .inspect_err(|err| debug!("'{mime}' could not be mapped to a MIME type: {err}"))
+                .ok()
+        });
+
+    let expected_mime = mime.essence_str();
+    mimes.any(|mime| mime.essence_str() == expected_mime)
+}
+
 #[cfg(test)]
 mod tests {
     use super::add_padding;
@@ -114,4 +150,16 @@ mod tests {
     //         true
     //     );
     // }
+}
+
+pub trait VecExt {
+    fn sorted(&self) -> Self;
+}
+
+impl<T: Ord + Clone> VecExt for Vec<T> {
+    fn sorted(&self) -> Self {
+        let mut res = self.clone();
+        res.sort();
+        res
+    }
 }

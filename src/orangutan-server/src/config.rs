@@ -1,7 +1,6 @@
 use std::process::exit;
 
 use lazy_static::lazy_static;
-pub(super) use orangutan_helpers::config::*;
 use orangutan_helpers::readers::keys_reader::KeysReader;
 use tracing::error;
 

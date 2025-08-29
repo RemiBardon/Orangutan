@@ -1,4 +1,6 @@
+mod auth;
 mod config;
+mod middlewares;
 mod request_guards;
 mod routes;
 mod util;
@@ -10,7 +12,6 @@ use axum::{
     http::{Request, StatusCode},
     middleware,
     response::{IntoResponse, Response},
-    Router,
 };
 use orangutan_helpers::{
     generate::{self, *},
@@ -21,16 +22,21 @@ use tokio::runtime::Handle;
 use tower::Service;
 use tower_http::{
     services::{fs::ServeFileSystemResponseBody, ServeFile},
-    trace::TraceLayer,
+    trace::{self, TraceLayer},
 };
-use tracing::{debug, info, warn};
+use tracing::{debug, info, warn, Level};
 use tracing_subscriber::EnvFilter;
 #[cfg(feature = "token-generator")]
 use util::WebsiteRoot;
 
 #[cfg(feature = "templating")]
 use crate::util::templating;
-use crate::{config::NOT_FOUND_FILE, routes::update_content_routes, util::error};
+use crate::{
+    config::NOT_FOUND_FILE,
+    middlewares::{request_id_middleware, tracing_middleware},
+    routes::update_content_routes,
+    util::error,
+};
 
 #[derive(Clone)]
 struct AppState {
@@ -43,7 +49,10 @@ struct AppState {
 #[tokio::main]
 async fn main() -> ExitCode {
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
+        .with_env_filter(
+            EnvFilter::from_default_env().add_directive("tower_http::trace=info".parse().unwrap()),
+        )
+        .pretty()
         .init();
 
     #[cfg(feature = "token-generator")]
@@ -74,10 +83,15 @@ async fn main() -> ExitCode {
         }
     }
 
-    let app = Router::new()
-        .merge(routes::router())
-        .layer(TraceLayer::new_for_http())
+    let app = routes::router()
+        .layer(middleware::from_fn(request_id_middleware))
+        .layer(middleware::from_fn(tracing_middleware))
         .route_layer(middleware::from_fn(handle_refresh_token))
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(trace::DefaultMakeSpan::new().level(Level::INFO))
+                .on_response(trace::DefaultOnResponse::new().level(Level::INFO)),
+        )
         .with_state(app_state);
     // .register("/", catchers![unauthorized, forbidden, not_found])
 
